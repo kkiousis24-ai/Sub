@@ -1,327 +1,530 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
-using Microsoft.EntityFrameworkCore;
-using Sub.Api.Data;
 using Sub.Api.Models;
 
 namespace Sub.Api.Services;
 
 public class SubscriptionDetectionService
+    : ISubscriptionDetectionService
 {
-    private readonly AppDbContext _context;
-
-    public SubscriptionDetectionService(AppDbContext context)
+    // Πολύ ισχυρές ενδείξεις recurring subscription
+    private static readonly string[] StrongRecurringPhrases =
     {
-        _context = context;
-    }
+        "subscription will be renewing",
+        "subscription will automatically renew",
+        "automatically renew",
+        "automatic renewal",
+        "subscription renewed",
+        "subscription renewal",
+        "renewing soon",
+        "recurring payment",
+        "recurring charge",
+        "auto-renew",
+        "auto renew"
+    };
 
-    public async Task<List<Subscription>> DetectAndSaveAsync(
-        ConnectedEmailAccount account,
-        List<GmailMessageResponse> messages)
+    // Επιβεβαίωση αγοράς / ενεργοποίησης subscription
+    private static readonly string[] PurchasePhrases =
     {
-        var detectedSubscriptions = new List<Subscription>();
+        "subscription purchase confirmation",
+        "thanks for subscribing",
+        "thank you for subscribing",
+        "subscription activated",
+        "membership activated",
+        "membership confirmation",
+        "subscription confirmation"
+    };
 
-        foreach (var message in messages)
+    // Cancellation emails
+    private static readonly string[] CancellationPhrases =
+    {
+        "subscription cancellation confirmation",
+        "canceled subscription confirmation",
+        "cancelled subscription confirmation",
+        "canceled subscription",
+        "cancelled subscription",
+        "subscription has been canceled",
+        "subscription has been cancelled",
+        "membership canceled",
+        "membership cancelled"
+    };
+
+    private static readonly string[] GenericSubscriptionWords =
+    {
+        "subscription",
+        "subscriber",
+        "subscribing",
+        "membership"
+    };
+
+    private static readonly string[] PaymentPhrases =
+    {
+        "payment confirmation",
+        "payment received",
+        "recent payment",
+        "your payment",
+        "payment successful",
+        "charged",
+        "has been charged",
+        "billed",
+        "billing"
+    };
+
+    private static readonly string[] MonthlyPhrases =
+    {
+        "monthly",
+        "every month",
+        "per month",
+        "/month",
+        "each month"
+    };
+
+    private static readonly string[] YearlyPhrases =
+    {
+        "yearly",
+        "annual",
+        "annually",
+        "every year",
+        "per year",
+        "/year"
+    };
+
+    private static readonly string[] WeeklyPhrases =
+    {
+        "weekly",
+        "every week",
+        "per week",
+        "/week"
+    };
+
+    private static readonly string[] ManagementPhrases =
+    {
+        "manage subscription",
+        "manage your subscription",
+        "cancel subscription",
+        "cancel your subscription",
+        "subscription settings",
+        "manage membership",
+        "billing settings"
+    };
+
+    private static readonly string[] MarketingPhrases =
+    {
+        "newsletter",
+        "special offer",
+        "limited offer",
+        "promo code",
+        "shop now",
+        "black friday",
+        "sale ends",
+        "save up to"
+    };
+
+    public SubscriptionDetectionResult Detect(
+        EmailCandidate email)
+    {
+        var result = new SubscriptionDetectionResult();
+
+        var subject = email.Subject ?? "";
+        var snippet = email.Snippet ?? "";
+        var from = email.From ?? "";
+
+        var text =
+            $"{subject} {snippet}"
+                .ToLowerInvariant();
+
+        var fromLower =
+            from.ToLowerInvariant();
+
+        var score = 0;
+
+        // ==================================================
+        // 1. Strong recurring evidence
+        // ==================================================
+
+        var recurringPhrase =
+            FindFirstMatch(
+                text,
+                StrongRecurringPhrases);
+
+        if (recurringPhrase != null)
         {
-            var combinedText =
-                $"{message.From} {message.Subject} {message.Snippet}"
-                    .ToLowerInvariant();
+            score += 5;
 
-            var merchant = DetectMerchant(combinedText);
-
-            if (merchant == null)
-            {
-                continue;
-            }
-
-            var amountResult = DetectAmount(combinedText);
-
-            if (amountResult == null)
-            {
-                continue;
-            }
-
-            var billingCycle = DetectBillingCycle(combinedText);
-
-            var confidence = CalculateConfidence(
-                combinedText,
-                merchant,
-                amountResult.Value.Amount
+            result.Reasons.Add(
+                $"Strong recurring signal: {recurringPhrase}"
             );
-
-            var alreadyExists =
-                await _context.Subscriptions.AnyAsync(s =>
-                    s.UserId == account.UserId &&
-                    s.ConnectedEmailAccountId == account.Id &&
-                    s.Merchant == merchant &&
-                    s.Amount == amountResult.Value.Amount &&
-                    s.Status == "Active"
-                );
-
-            if (alreadyExists)
-            {
-                continue;
-            }
-
-            var subscription = new Subscription
-            {
-                UserId = account.UserId,
-                ConnectedEmailAccountId = account.Id,
-
-                Merchant = merchant,
-
-                PlanName = DetectPlanName(
-                    merchant,
-                    message.Subject
-                ),
-
-                Amount = amountResult.Value.Amount,
-
-                Currency = amountResult.Value.Currency,
-
-                BillingCycle = billingCycle,
-
-                NextBillingDate = null,
-
-                Status = "Active",
-
-                ConfidenceScore = confidence,
-
-                CancellationUrl =
-                    GetCancellationUrl(merchant),
-
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _context.Subscriptions.Add(subscription);
-
-            detectedSubscriptions.Add(subscription);
         }
 
-        await _context.SaveChangesAsync();
+        // ==================================================
+        // 2. Cancellation
+        // ==================================================
 
-        return detectedSubscriptions;
+        var cancellationPhrase =
+            FindFirstMatch(
+                text,
+                CancellationPhrases);
+
+        if (cancellationPhrase != null)
+        {
+            score += 5;
+
+            result.Reasons.Add(
+                $"Subscription cancellation signal: {cancellationPhrase}"
+            );
+        }
+
+        // ==================================================
+        // 3. Subscription purchase
+        //
+        // Δίνουμε purchase score μόνο αν ΔΕΝ είναι
+        // cancellation email.
+        // Έτσι ένα:
+        // "Subscription Cancellation Confirmation"
+        // δεν μετράει και σαν purchase.
+        // ==================================================
+
+        var purchasePhrase =
+            FindFirstMatch(
+                text,
+                PurchasePhrases);
+
+        if (purchasePhrase != null &&
+            cancellationPhrase == null)
+        {
+            score += 5;
+
+            result.Reasons.Add(
+                $"Subscription purchase signal: {purchasePhrase}"
+            );
+        }
+
+        // ==================================================
+        // 4. Generic subscription terminology
+        // ==================================================
+
+        var subscriptionWord =
+            FindFirstMatch(
+                text,
+                GenericSubscriptionWords);
+
+        if (subscriptionWord != null)
+        {
+            score += 2;
+
+            result.Reasons.Add(
+                $"Subscription terminology: {subscriptionWord}"
+            );
+        }
+
+        // ==================================================
+        // 5. Payment evidence
+        // ==================================================
+
+        var paymentPhrase =
+            FindFirstMatch(
+                text,
+                PaymentPhrases);
+
+        if (paymentPhrase != null)
+        {
+            score += 2;
+
+            result.Reasons.Add(
+                $"Payment signal: {paymentPhrase}"
+            );
+        }
+
+        // ==================================================
+        // 6. Billing frequency
+        // ==================================================
+
+        result.BillingPeriod =
+            DetectBillingPeriod(text);
+
+        if (result.BillingPeriod != null)
+        {
+            score += 2;
+
+            result.Reasons.Add(
+                $"Billing period detected: {result.BillingPeriod}"
+            );
+        }
+
+        // ==================================================
+        // 7. Manage / cancel wording
+        // ==================================================
+
+        var managementPhrase =
+            FindFirstMatch(
+                text,
+                ManagementPhrases);
+
+        if (managementPhrase != null)
+        {
+            score += 2;
+
+            result.Reasons.Add(
+                $"Subscription management signal: {managementPhrase}"
+            );
+        }
+
+        // ==================================================
+        // 8. Price / currency
+        // ==================================================
+
+        result.Amount =
+            ExtractAmount(
+                text,
+                out var currency);
+
+        if (result.Amount.HasValue)
+        {
+            score += 2;
+
+            result.Currency = currency;
+
+            result.Reasons.Add(
+                $"Price detected: {result.Amount} {currency}"
+            );
+        }
+
+        // ==================================================
+        // 9. Sender signals
+        // ==================================================
+
+        if (
+            fromLower.Contains("billing") ||
+            fromLower.Contains("payment") ||
+            fromLower.Contains("purchase")
+        )
+        {
+            score += 1;
+
+            result.Reasons.Add(
+                "Sender appears related to billing or purchases"
+            );
+        }
+
+        // ==================================================
+        // 10. Marketing penalty
+        // ==================================================
+
+        var marketingPhrase =
+            FindFirstMatch(
+                text,
+                MarketingPhrases);
+
+        if (
+            marketingPhrase != null &&
+            recurringPhrase == null &&
+            purchasePhrase == null &&
+            cancellationPhrase == null
+        )
+        {
+            score -= 3;
+
+            result.Reasons.Add(
+                $"Possible marketing email: {marketingPhrase}"
+            );
+        }
+
+        // ==================================================
+        // Merchant
+        // ==================================================
+
+        result.Merchant =
+            ExtractMerchant(from);
+
+        // Δεν επιστρέφουμε αρνητικό score
+        result.Score =
+            Math.Max(score, 0);
+
+        // ==================================================
+        // Final decision
+        // ==================================================
+
+        result.IsSubscription =
+            result.Score >= 5;
+
+        result.Confidence =
+            result.Score switch
+            {
+                >= 9 => "High",
+                >= 5 => "Medium",
+                _ => "Low"
+            };
+
+        return result;
     }
 
-    private string? DetectMerchant(string text)
-    {
-        var merchants = new Dictionary<string, string>
-        {
-            { "netflix", "Netflix" },
-            { "spotify", "Spotify" },
-            { "youtube premium", "YouTube Premium" },
-            { "google one", "Google One" },
-            { "icloud", "iCloud" },
-            { "apple music", "Apple Music" },
-            { "disney+", "Disney+" },
-            { "disney plus", "Disney+" },
-            { "amazon prime", "Amazon Prime" },
-            { "prime video", "Amazon Prime" },
-            { "adobe", "Adobe" },
-            { "microsoft 365", "Microsoft 365" },
-            { "office 365", "Microsoft 365" },
-            { "dropbox", "Dropbox" },
-            { "canva", "Canva" },
-            { "chatgpt", "ChatGPT" },
-            { "openai", "ChatGPT" },
-            { "claude", "Claude" },
-            { "anthropic", "Claude" }
-        };
+    // ======================================================
+    // Find first matching phrase
+    // ======================================================
 
-        foreach (var merchant in merchants)
+    private static string? FindFirstMatch(
+        string text,
+        IEnumerable<string> phrases)
+    {
+        return phrases.FirstOrDefault(
+            phrase => text.Contains(phrase)
+        );
+    }
+
+    // ======================================================
+    // Billing period
+    // ======================================================
+
+    private static string? DetectBillingPeriod(
+        string text)
+    {
+        if (
+            MonthlyPhrases.Any(
+                phrase => text.Contains(phrase)))
         {
-            if (text.Contains(merchant.Key))
-            {
-                return merchant.Value;
-            }
+            return "Monthly";
+        }
+
+        if (
+            YearlyPhrases.Any(
+                phrase => text.Contains(phrase)))
+        {
+            return "Yearly";
+        }
+
+        if (
+            WeeklyPhrases.Any(
+                phrase => text.Contains(phrase)))
+        {
+            return "Weekly";
         }
 
         return null;
     }
 
-    private (decimal Amount, string Currency)? DetectAmount(
-        string text)
+    // ======================================================
+    // Price extraction
+    // ======================================================
+
+    private static decimal? ExtractAmount(
+        string text,
+        out string? currency)
     {
-        var patterns = new[]
-        {
-            @"€\s*(\d+[.,]?\d*)",
-            @"(\d+[.,]?\d*)\s*€",
+        currency = null;
 
-            @"\$\s*(\d+[.,]?\d*)",
-            @"(\d+[.,]?\d*)\s*(usd|dollars?)",
+        var patterns =
+            new Dictionary<string, string>
+            {
+                {
+                    "EUR",
+                    @"(?:€\s?|eur\s?)(\d+(?:[.,]\d{1,2})?)"
+                },
 
-            @"£\s*(\d+[.,]?\d*)",
-            @"(\d+[.,]?\d*)\s*(gbp|pounds?)",
+                {
+                    "USD",
+                    @"(?:\$\s?|usd\s?)(\d+(?:[.,]\d{1,2})?)"
+                },
 
-            @"(\d+[.,]?\d*)\s*eur"
-        };
+                {
+                    "GBP",
+                    @"(?:£\s?|gbp\s?)(\d+(?:[.,]\d{1,2})?)"
+                }
+            };
 
         foreach (var pattern in patterns)
         {
-            var match = Regex.Match(
-                text,
-                pattern,
-                RegexOptions.IgnoreCase
-            );
+            var match =
+                Regex.Match(
+                    text,
+                    pattern.Value,
+                    RegexOptions.IgnoreCase);
 
             if (!match.Success)
             {
                 continue;
             }
 
-            var amountText = match.Groups[1]
-                .Value
-                .Replace(",", ".");
+            var amountString =
+                match.Groups[1]
+                    .Value
+                    .Replace(',', '.');
 
-            if (!decimal.TryParse(
-                    amountText,
+            if (
+                decimal.TryParse(
+                    amountString,
                     NumberStyles.Any,
                     CultureInfo.InvariantCulture,
                     out var amount))
             {
-                continue;
+                currency =
+                    pattern.Key;
+
+                return amount;
             }
-
-            var currency = "EUR";
-
-            if (pattern.Contains(@"\$") ||
-                text.Contains("usd"))
-            {
-                currency = "USD";
-            }
-
-            if (pattern.Contains("£") ||
-                text.Contains("gbp"))
-            {
-                currency = "GBP";
-            }
-
-            return (amount, currency);
         }
 
         return null;
     }
 
-    private string DetectBillingCycle(string text)
+    // ======================================================
+    // Merchant extraction
+    // ======================================================
+
+    private static string? ExtractMerchant(
+        string from)
     {
-        if (
-            text.Contains("yearly") ||
-            text.Contains("annual") ||
-            text.Contains("annually") ||
-            text.Contains("per year") ||
-            text.Contains("/year")
-        )
-        {
-            return "Yearly";
-        }
-
-        if (
-            text.Contains("weekly") ||
-            text.Contains("per week") ||
-            text.Contains("/week")
-        )
-        {
-            return "Weekly";
-        }
-
-        return "Monthly";
-    }
-
-    private string? DetectPlanName(
-        string merchant,
-        string? subject)
-    {
-        if (string.IsNullOrWhiteSpace(subject))
+        if (string.IsNullOrWhiteSpace(from))
         {
             return null;
         }
 
-        if (subject.Contains(
-                merchant,
-                StringComparison.OrdinalIgnoreCase))
+        // Example:
+        // Netflix <info@account.netflix.com>
+        // -> Netflix
+
+        var nameMatch =
+            Regex.Match(
+                from,
+                @"^(.*?)\s*<");
+
+        if (nameMatch.Success)
         {
-            return subject;
-        }
+            var merchant =
+                nameMatch
+                    .Groups[1]
+                    .Value
+                    .Trim()
+                    .Trim('"');
 
-        return null;
-    }
-
-    private double CalculateConfidence(
-        string text,
-        string merchant,
-        decimal amount)
-    {
-        double confidence = 0.45;
-
-        if (!string.IsNullOrWhiteSpace(merchant))
-        {
-            confidence += 0.20;
-        }
-
-        if (amount > 0)
-        {
-            confidence += 0.15;
-        }
-
-        var subscriptionKeywords = new[]
-        {
-            "subscription",
-            "renewal",
-            "renew",
-            "membership",
-            "charged",
-            "payment",
-            "invoice",
-            "receipt",
-            "billing"
-        };
-
-        foreach (var keyword in subscriptionKeywords)
-        {
-            if (text.Contains(keyword))
+            if (!string.IsNullOrWhiteSpace(merchant))
             {
-                confidence += 0.04;
+                return merchant;
             }
         }
 
-        return Math.Min(confidence, 0.99);
-    }
+        // Example:
+        // purchase-noreply@twitch.tv
+        // -> Twitch
 
-    private string? GetCancellationUrl(string merchant)
-    {
-        return merchant switch
+        var emailMatch =
+            Regex.Match(
+                from,
+                @"@([^.]+)");
+
+        if (emailMatch.Success)
         {
-            "Netflix" =>
-                "https://www.netflix.com/cancelplan",
+            var domain =
+                emailMatch
+                    .Groups[1]
+                    .Value;
 
-            "Spotify" =>
-                "https://www.spotify.com/account/",
+            if (!string.IsNullOrWhiteSpace(domain))
+            {
+                return char.ToUpper(domain[0]) +
+                       domain[1..];
+            }
+        }
 
-            "YouTube Premium" =>
-                "https://www.youtube.com/paid_memberships",
-
-            "Amazon Prime" =>
-                "https://www.amazon.com/gp/subs/primeclub/account/homepage.html",
-
-            "Adobe" =>
-                "https://account.adobe.com/plans",
-
-            "Microsoft 365" =>
-                "https://account.microsoft.com/services/",
-
-            "Dropbox" =>
-                "https://www.dropbox.com/account/plan",
-
-            "Canva" =>
-                "https://www.canva.com/settings/billing-and-plans",
-
-            "ChatGPT" =>
-                "https://chatgpt.com/",
-
-            "Claude" =>
-                "https://claude.ai/",
-
-            _ => null
-        };
+        return from;
     }
 }
