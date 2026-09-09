@@ -480,3 +480,8 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+# Local database - may contain OAuth tokens
+sub.db
+sub.db-shm
+sub.db-wal
+*.db
