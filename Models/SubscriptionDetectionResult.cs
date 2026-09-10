@@ -16,5 +16,8 @@ public class SubscriptionDetectionResult
 
     public string? BillingPeriod { get; set; }
 
+    // Active / Canceled / Unknown
+    public string SubscriptionStatus { get; set; } = "Unknown";
+
     public List<string> Reasons { get; set; } = new();
 }
