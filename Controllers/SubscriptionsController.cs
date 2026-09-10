@@ -26,7 +26,6 @@ public class SubscriptionsController : ControllerBase
 
     // =========================================================
     // GET: api/subscriptions
-    // Επιστρέφει όλες τις αποθηκευμένες συνδρομές
     // =========================================================
 
     [HttpGet]
@@ -41,7 +40,6 @@ public class SubscriptionsController : ControllerBase
 
     // =========================================================
     // GET: api/subscriptions/1
-    // Επιστρέφει μία συγκεκριμένη συνδρομή
     // =========================================================
 
     [HttpGet("{id}")]
@@ -63,7 +61,7 @@ public class SubscriptionsController : ControllerBase
 
     // =========================================================
     // POST: api/subscriptions
-    // Δημιουργεί χειροκίνητα νέα συνδρομή
+    // Manual creation
     // =========================================================
 
     [HttpPost]
@@ -113,19 +111,28 @@ public class SubscriptionsController : ControllerBase
     // =========================================================
     // POST: api/subscriptions/scan
     //
-    // Παίρνει πιθανά subscription emails από Gmail
-    // και τα περνάει από το Detection Engine.
-    //
-    // Προς το παρόν ΔΕΝ τα αποθηκεύει στη SQLite.
+    // Gmail
+    // ↓
+    // Detection Engine
+    // ↓
+    // Deduplication
+    // ↓
+    // Subscription status handling
+    // ↓
+    // Next Billing Date
+    // ↓
+    // Evidence
+    // ↓
+    // SQLite
     // =========================================================
 
     [HttpPost("scan")]
     public async Task<IActionResult> ScanSubscriptions()
     {
-        // Παίρνουμε το πρώτο connected Gmail account
         var account = await _context.ConnectedEmailAccounts
-            .AsNoTracking()
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync(a =>
+                a.Provider == "Google" &&
+                a.IsActive);
 
         if (account == null)
         {
@@ -138,58 +145,359 @@ public class SubscriptionsController : ControllerBase
         try
         {
             // =================================================
-            // 1. Παίρνουμε πιθανά subscription emails
+            // 1. Fetch emails
             // =================================================
 
             var emails =
                 await _gmailService.GetSubscriptionEmailsAsync(account);
 
+            // =================================================
+            // 2. Parse + sort oldest -> newest
+            // =================================================
+
+            var candidates = emails
+                .Select(email => new EmailCandidate
+                {
+                    GmailMessageId =
+                        email.MessageId ?? string.Empty,
+
+                    From =
+                        email.From ?? string.Empty,
+
+                    Subject =
+                        email.Subject ?? string.Empty,
+
+                    Snippet =
+                        email.Snippet ?? string.Empty,
+
+                    Date =
+                        ParseGmailDate(email.Date)
+                })
+                .Where(x =>
+                    !string.IsNullOrWhiteSpace(
+                        x.GmailMessageId))
+                .OrderBy(x =>
+                    x.Date ?? DateTime.MinValue)
+                .ToList();
+
             var detectedSubscriptions =
                 new List<DetectedSubscriptionResponse>();
 
+            var newSubscriptions = 0;
+            var updatedSubscriptions = 0;
+            var canceledSubscriptions = 0;
+            var newEvidenceRecords = 0;
+            var skippedDuplicateEmails = 0;
+
             // =================================================
-            // 2. Περνάμε κάθε email από το Detection Engine
+            // 3. Process emails
             // =================================================
 
-            foreach (var email in emails)
+            foreach (var candidate in candidates)
             {
-                var parsedDate =
-                    ParseGmailDate(email.Date);
+                // =============================================
+                // Email deduplication
+                // =============================================
 
-                var candidate = new EmailCandidate
+                var evidenceAlreadyExists =
+                    await _context.SubscriptionEvidences
+                        .AnyAsync(e =>
+                            e.MessageId ==
+                            candidate.GmailMessageId);
+
+                if (evidenceAlreadyExists)
                 {
-                    GmailMessageId =
-                        email.MessageId ?? "",
-
-                    From =
-                        email.From ?? "",
-
-                    Subject =
-                        email.Subject ?? "",
-
-                    Snippet =
-                        email.Snippet ?? "",
-
-                    Date =
-                        parsedDate
-                };
+                    skippedDuplicateEmails++;
+                    continue;
+                }
 
                 // =============================================
-                // Detection Engine
+                // Detection
                 // =============================================
 
                 var detection =
                     _detectionService.Detect(candidate);
 
-                // Αν δεν θεωρείται subscription,
-                // το αγνοούμε.
                 if (!detection.IsSubscription)
                 {
                     continue;
                 }
 
+                var merchant =
+                    string.IsNullOrWhiteSpace(
+                        detection.Merchant)
+                        ? "Unknown"
+                        : detection.Merchant.Trim();
+
+                var normalizedMerchant =
+                    merchant.ToLowerInvariant();
+
+                var currency =
+                    string.IsNullOrWhiteSpace(
+                        detection.Currency)
+                        ? "EUR"
+                        : detection.Currency
+                            .Trim()
+                            .ToUpperInvariant();
+
+                var billingCycle =
+                    string.IsNullOrWhiteSpace(
+                        detection.BillingPeriod)
+                        ? "Unknown"
+                        : detection.BillingPeriod;
+
+                var detectedStatus =
+                    detection.SubscriptionStatus switch
+                    {
+                        "Canceled" => "Canceled",
+                        "Active" => "Active",
+                        _ => "Active"
+                    };
+
+                var confidenceScore =
+                    Math.Min(
+                        detection.Score / 10.0,
+                        1.0
+                    );
+
                 // =============================================
-                // Αποτέλεσμα
+                // Find existing subscription
+                // =============================================
+
+                var subscription =
+                    await _context.Subscriptions
+                        .FirstOrDefaultAsync(s =>
+                            s.UserId ==
+                            account.UserId &&
+
+                            s.ConnectedEmailAccountId ==
+                            account.Id &&
+
+                            s.Merchant.ToLower() ==
+                            normalizedMerchant);
+
+                // =============================================
+                // CREATE
+                // =============================================
+
+                if (subscription == null)
+                {
+                    subscription =
+                        new Subscription
+                        {
+                            UserId =
+                                account.UserId,
+
+                            ConnectedEmailAccountId =
+                                account.Id,
+
+                            Merchant =
+                                merchant,
+
+                            PlanName =
+                                null,
+
+                            Amount =
+                                detection.Amount ?? 0m,
+
+                            Currency =
+                                currency,
+
+                            BillingCycle =
+                                billingCycle,
+
+                            // ---------------------------------
+                            // NEW:
+                            // Save next billing date when active.
+                            // A canceled subscription should not
+                            // retain a future billing date.
+                            // ---------------------------------
+
+                            NextBillingDate =
+                                detectedStatus == "Canceled"
+                                    ? null
+                                    : detection.NextBillingDate,
+
+                            Status =
+                                detectedStatus,
+
+                            ConfidenceScore =
+                                confidenceScore,
+
+                            CancellationUrl =
+                                null,
+
+                            CreatedAt =
+                                DateTime.UtcNow
+                        };
+
+                    _context.Subscriptions.Add(
+                        subscription);
+
+                    // Χρειαζόμαστε ID για το evidence
+                    await _context.SaveChangesAsync();
+
+                    newSubscriptions++;
+
+                    if (detectedStatus == "Canceled")
+                    {
+                        canceledSubscriptions++;
+                    }
+                }
+
+                // =============================================
+                // UPDATE EXISTING
+                // =============================================
+
+                else
+                {
+                    var latestEvidence =
+                        await _context.SubscriptionEvidences
+                            .Where(e =>
+                                e.SubscriptionId ==
+                                subscription.Id)
+                            .OrderByDescending(e =>
+                                e.DetectedDate ??
+                                e.CreatedAt)
+                            .FirstOrDefaultAsync();
+
+                    var latestKnownDate =
+                        latestEvidence?.DetectedDate ??
+                        latestEvidence?.CreatedAt;
+
+                    var currentEmailDate =
+                        candidate.Date;
+
+                    // Ενημέρωση status μόνο όταν το email
+                    // δεν είναι παλαιότερο από το τελευταίο.
+                    var canUpdateStatus =
+                        latestKnownDate == null ||
+                        currentEmailDate == null ||
+                        currentEmailDate >= latestKnownDate;
+
+                    if (canUpdateStatus)
+                    {
+                        var oldStatus =
+                            subscription.Status;
+
+                        subscription.Status =
+                            detectedStatus;
+
+                        if (
+                            detectedStatus == "Canceled" &&
+                            oldStatus != "Canceled")
+                        {
+                            canceledSubscriptions++;
+                        }
+
+                        // =====================================
+                        // Next Billing Date
+                        //
+                        // Cancellation -> clear date
+                        // Active + date detected -> save date
+                        // =====================================
+
+                        if (detectedStatus == "Canceled")
+                        {
+                            subscription.NextBillingDate =
+                                null;
+                        }
+                        else if (
+                            detection.NextBillingDate.HasValue)
+                        {
+                            subscription.NextBillingDate =
+                                detection.NextBillingDate.Value;
+                        }
+                    }
+
+                    // =========================================
+                    // Amount
+                    // =========================================
+
+                    if (detection.Amount.HasValue &&
+                        detection.Amount.Value > 0)
+                    {
+                        subscription.Amount =
+                            detection.Amount.Value;
+                    }
+
+                    // =========================================
+                    // Currency
+                    // =========================================
+
+                    if (!string.IsNullOrWhiteSpace(
+                        detection.Currency))
+                    {
+                        subscription.Currency =
+                            currency;
+                    }
+
+                    // =========================================
+                    // Billing Cycle
+                    // =========================================
+
+                    if (billingCycle != "Unknown")
+                    {
+                        subscription.BillingCycle =
+                            billingCycle;
+                    }
+
+                    // =========================================
+                    // Confidence
+                    // =========================================
+
+                    if (confidenceScore >
+                        subscription.ConfidenceScore)
+                    {
+                        subscription.ConfidenceScore =
+                            confidenceScore;
+                    }
+
+                    updatedSubscriptions++;
+                }
+
+                // =============================================
+                // 4. Store Evidence
+                // =============================================
+
+                var evidence =
+                    new SubscriptionEvidence
+                    {
+                        SubscriptionId =
+                            subscription.Id,
+
+                        MessageId =
+                            candidate.GmailMessageId,
+
+                        Sender =
+                            candidate.From,
+
+                        Subject =
+                            candidate.Subject,
+
+                        DetectedAmount =
+                            detection.Amount,
+
+                        DetectedCurrency =
+                            detection.Currency,
+
+                        DetectedDate =
+                            candidate.Date,
+
+                        Snippet =
+                            candidate.Snippet,
+
+                        CreatedAt =
+                            DateTime.UtcNow
+                    };
+
+                _context.SubscriptionEvidences.Add(
+                    evidence);
+
+                newEvidenceRecords++;
+
+                // =============================================
+                // Response object
                 // =============================================
 
                 detectedSubscriptions.Add(
@@ -219,6 +527,10 @@ public class SubscriptionsController : ControllerBase
                         BillingPeriod =
                             detection.BillingPeriod,
 
+                        // NEW
+                        NextBillingDate =
+                            detection.NextBillingDate,
+
                         Score =
                             detection.Score,
 
@@ -230,9 +542,18 @@ public class SubscriptionsController : ControllerBase
                     });
             }
 
-            // =============================================
-            // Υψηλότερο score πρώτο
-            // =============================================
+            // =================================================
+            // 5. Update last sync
+            // =================================================
+
+            account.LastSyncAt =
+                DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            // =================================================
+            // 6. Final response
+            // =================================================
 
             var orderedResults =
                 detectedSubscriptions
@@ -241,11 +562,35 @@ public class SubscriptionsController : ControllerBase
 
             return Ok(new
             {
+                message =
+                    "Gmail subscription scan completed.",
+
+                accountId =
+                    account.Id,
+
+                emailAddress =
+                    account.EmailAddress,
+
                 scannedEmails =
                     emails.Count,
 
                 detectedSubscriptions =
                     orderedResults.Count,
+
+                newSubscriptions =
+                    newSubscriptions,
+
+                updatedSubscriptions =
+                    updatedSubscriptions,
+
+                canceledSubscriptions =
+                    canceledSubscriptions,
+
+                newEvidenceRecords =
+                    newEvidenceRecords,
+
+                skippedDuplicateEmails =
+                    skippedDuplicateEmails,
 
                 subscriptions =
                     orderedResults
@@ -268,7 +613,6 @@ public class SubscriptionsController : ControllerBase
 
     // =========================================================
     // PUT: api/subscriptions/1
-    // Ενημερώνει μία υπάρχουσα συνδρομή
     // =========================================================
 
     [HttpPut("{id}")]
@@ -327,7 +671,6 @@ public class SubscriptionsController : ControllerBase
 
     // =========================================================
     // DELETE: api/subscriptions/1
-    // Διαγράφει μία συνδρομή
     // =========================================================
 
     [HttpDelete("{id}")]
@@ -344,7 +687,8 @@ public class SubscriptionsController : ControllerBase
             });
         }
 
-        _context.Subscriptions.Remove(subscription);
+        _context.Subscriptions.Remove(
+            subscription);
 
         await _context.SaveChangesAsync();
 
@@ -353,15 +697,10 @@ public class SubscriptionsController : ControllerBase
 
     // =========================================================
     // Gmail Date Parser
-    //
-    // Παράδειγμα Gmail:
-    // Wed, 07 Jan 2026 08:12:49 +0000 (UTC)
-    //
-    // Το "(UTC)" ή "(EEST)" μπορεί να προκαλέσει
-    // αποτυχία στο DateTimeOffset.TryParse.
     // =========================================================
 
-    private static DateTime? ParseGmailDate(string? gmailDate)
+    private static DateTime? ParseGmailDate(
+        string? gmailDate)
     {
         if (string.IsNullOrWhiteSpace(gmailDate))
         {
@@ -371,10 +710,6 @@ public class SubscriptionsController : ControllerBase
         var cleanDate =
             gmailDate.Trim();
 
-        // Αφαιρούμε:
-        // (UTC)
-        // (EEST)
-        // κτλ.
         var parenthesisIndex =
             cleanDate.IndexOf(" (");
 
