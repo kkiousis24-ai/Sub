@@ -6,115 +6,121 @@ using Sub.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ----------------------------------------------------
+// ======================================================
 // Controllers
-// ----------------------------------------------------
+// ======================================================
 
 builder.Services.AddControllers();
 
-
-// ----------------------------------------------------
-// Swagger
-// ----------------------------------------------------
+// ======================================================
+// Swagger / OpenAPI
+// ======================================================
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-
-// ----------------------------------------------------
-// Database - SQLite
-// ----------------------------------------------------
+// ======================================================
+// SQLite Database
+// ======================================================
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-{
-    var connectionString =
-        builder.Configuration.GetConnectionString("DefaultConnection");
+    options.UseSqlite(
+        builder.Configuration.GetConnectionString("DefaultConnection")
+    )
+);
 
-    options.UseSqlite(connectionString);
-});
-
-
-// ----------------------------------------------------
-// Google Authentication / Gmail OAuth
-// ----------------------------------------------------
+// ======================================================
+// Authentication
+// ======================================================
 
 builder.Services
     .AddAuthentication(options =>
     {
-        options.DefaultScheme =
+        options.DefaultAuthenticateScheme =
             CookieAuthenticationDefaults.AuthenticationScheme;
 
-        options.DefaultChallengeScheme =
-            GoogleDefaults.AuthenticationScheme;
+        options.DefaultSignInScheme =
+            CookieAuthenticationDefaults.AuthenticationScheme;
     })
-    .AddCookie()
-    .AddGoogle(options =>
-    {
-        var clientId =
-            builder.Configuration["Authentication:Google:ClientId"];
 
-        var clientSecret =
-            builder.Configuration["Authentication:Google:ClientSecret"];
+    // Cookie authentication
+    .AddCookie(
+        CookieAuthenticationDefaults.AuthenticationScheme
+    )
 
-        if (string.IsNullOrWhiteSpace(clientId))
+    // Google OAuth
+    .AddGoogle(
+        GoogleDefaults.AuthenticationScheme,
+        options =>
         {
-            throw new InvalidOperationException(
-                "Google ClientId is missing."
+            var clientId =
+                builder.Configuration[
+                    "Authentication:Google:ClientId"
+                ];
+
+            var clientSecret =
+                builder.Configuration[
+                    "Authentication:Google:ClientSecret"
+                ];
+
+            if (string.IsNullOrWhiteSpace(clientId))
+            {
+                throw new InvalidOperationException(
+                    "Google ClientId is missing."
+                );
+            }
+
+            if (string.IsNullOrWhiteSpace(clientSecret))
+            {
+                throw new InvalidOperationException(
+                    "Google ClientSecret is missing."
+                );
+            }
+
+            options.ClientId = clientId;
+            options.ClientSecret = clientSecret;
+
+            // Αποθηκεύει access token / refresh token
+            options.SaveTokens = true;
+
+            // Ζητά refresh token από Google
+            options.AccessType = "offline";
+
+            // Gmail read-only permission
+            options.Scope.Add(
+                "https://www.googleapis.com/auth/gmail.readonly"
             );
+
+            // Ζητά ξανά consent από τον χρήστη
+            options.AdditionalAuthorizationParameters[
+                "prompt"
+            ] = "consent";
         }
+    );
 
-        if (string.IsNullOrWhiteSpace(clientSecret))
-        {
-            throw new InvalidOperationException(
-                "Google ClientSecret is missing."
-            );
-        }
+// ======================================================
+// Gmail Service
+// ======================================================
 
-        options.ClientId = clientId;
-        options.ClientSecret = clientSecret;
-
-        // Κρατάμε access / refresh tokens
-        options.SaveTokens = true;
-
-        // Read-only πρόσβαση στο Gmail
-        options.Scope.Add(
-            "https://www.googleapis.com/auth/gmail.readonly"
-        );
-
-        // Offline access ώστε να μπορούμε αργότερα
-        // να ανανεώνουμε το access token
-        options.AccessType = "offline";
-    });
-
-
-// ----------------------------------------------------
-// Authorization
-// ----------------------------------------------------
-
-builder.Services.AddAuthorization();
-
-
-// ----------------------------------------------------
-// Application Services
-// ----------------------------------------------------
-
-// Επικοινωνία με Gmail API
 builder.Services.AddScoped<GoogleGmailService>();
 
-// Ανίχνευση subscriptions από emails
-builder.Services.AddScoped<SubscriptionDetectionService>();
+// ======================================================
+// Subscription Detection Engine
+// ======================================================
 
+builder.Services.AddScoped<
+    ISubscriptionDetectionService,
+    SubscriptionDetectionService>();
 
-// ----------------------------------------------------
-// Build application
-// ----------------------------------------------------
+// ======================================================
+// Build App
+// ======================================================
 
 var app = builder.Build();
 
-
-// ----------------------------------------------------
-// Development
-// ----------------------------------------------------
+// ======================================================
+// Swagger
+// ======================================================
 
 if (app.Environment.IsDevelopment())
 {
@@ -122,10 +128,9 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-
-// ----------------------------------------------------
+// ======================================================
 // Middleware
-// ----------------------------------------------------
+// ======================================================
 
 app.UseHttpsRedirection();
 
@@ -133,16 +138,10 @@ app.UseAuthentication();
 
 app.UseAuthorization();
 
-
-// ----------------------------------------------------
+// ======================================================
 // Controllers
-// ----------------------------------------------------
+// ======================================================
 
 app.MapControllers();
-
-
-// ----------------------------------------------------
-// Run
-// ----------------------------------------------------
 
 app.Run();
