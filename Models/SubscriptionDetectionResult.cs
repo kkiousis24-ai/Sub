@@ -16,6 +16,8 @@ public class SubscriptionDetectionResult
 
     public string? BillingPeriod { get; set; }
 
+    public DateTime? NextBillingDate { get; set; }
+
     // Active / Canceled / Unknown
     public string SubscriptionStatus { get; set; } = "Unknown";
 

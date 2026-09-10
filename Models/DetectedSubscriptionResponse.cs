@@ -18,6 +18,8 @@ public class DetectedSubscriptionResponse
 
     public string? BillingPeriod { get; set; }
 
+    public DateTime? NextBillingDate { get; set; }
+
     public int Score { get; set; }
 
     public string Confidence { get; set; } = "";

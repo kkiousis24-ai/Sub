@@ -119,6 +119,8 @@ public class SubscriptionsController : ControllerBase
     // ↓
     // Subscription status handling
     // ↓
+    // Next Billing Date
+    // ↓
     // Evidence
     // ↓
     // SQLite
@@ -151,12 +153,6 @@ public class SubscriptionsController : ControllerBase
 
             // =================================================
             // 2. Parse + sort oldest -> newest
-            //
-            // Έτσι:
-            // activation πρώτα
-            // cancellation αργότερα
-            //
-            // Το τελευταίο email κερδίζει.
             // =================================================
 
             var candidates = emails
@@ -266,10 +262,6 @@ public class SubscriptionsController : ControllerBase
 
                 // =============================================
                 // Find existing subscription
-                //
-                // Same user
-                // Same email account
-                // Same merchant
                 // =============================================
 
                 var subscription =
@@ -314,8 +306,17 @@ public class SubscriptionsController : ControllerBase
                             BillingCycle =
                                 billingCycle,
 
+                            // ---------------------------------
+                            // NEW:
+                            // Save next billing date when active.
+                            // A canceled subscription should not
+                            // retain a future billing date.
+                            // ---------------------------------
+
                             NextBillingDate =
-                                null,
+                                detectedStatus == "Canceled"
+                                    ? null
+                                    : detection.NextBillingDate,
 
                             Status =
                                 detectedStatus,
@@ -333,7 +334,7 @@ public class SubscriptionsController : ControllerBase
                     _context.Subscriptions.Add(
                         subscription);
 
-                    // Χρειαζόμαστε το ID για evidence
+                    // Χρειαζόμαστε ID για το evidence
                     await _context.SaveChangesAsync();
 
                     newSubscriptions++;
@@ -350,9 +351,6 @@ public class SubscriptionsController : ControllerBase
 
                 else
                 {
-                    // Βρίσκουμε το πιο πρόσφατο evidence
-                    // που έχουμε ήδη για αυτή τη subscription.
-
                     var latestEvidence =
                         await _context.SubscriptionEvidences
                             .Where(e =>
@@ -370,8 +368,8 @@ public class SubscriptionsController : ControllerBase
                     var currentEmailDate =
                         candidate.Date;
 
-                    // Ενημερώνουμε status μόνο αν το email
-                    // είναι νεότερο από αυτό που ήδη ξέρουμε.
+                    // Ενημέρωση status μόνο όταν το email
+                    // δεν είναι παλαιότερο από το τελευταίο.
                     var canUpdateStatus =
                         latestKnownDate == null ||
                         currentEmailDate == null ||
@@ -390,6 +388,25 @@ public class SubscriptionsController : ControllerBase
                             oldStatus != "Canceled")
                         {
                             canceledSubscriptions++;
+                        }
+
+                        // =====================================
+                        // Next Billing Date
+                        //
+                        // Cancellation -> clear date
+                        // Active + date detected -> save date
+                        // =====================================
+
+                        if (detectedStatus == "Canceled")
+                        {
+                            subscription.NextBillingDate =
+                                null;
+                        }
+                        else if (
+                            detection.NextBillingDate.HasValue)
+                        {
+                            subscription.NextBillingDate =
+                                detection.NextBillingDate.Value;
                         }
                     }
 
@@ -509,6 +526,10 @@ public class SubscriptionsController : ControllerBase
 
                         BillingPeriod =
                             detection.BillingPeriod,
+
+                        // NEW
+                        NextBillingDate =
+                            detection.NextBillingDate,
 
                         Score =
                             detection.Score,

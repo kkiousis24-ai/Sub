@@ -97,6 +97,8 @@ public class SubscriptionDetectionService
         "has been charged",
         "payment successful",
         "payment received",
+        "amount paid",
+        "total paid",
         "billing"
     };
 
@@ -106,7 +108,10 @@ public class SubscriptionDetectionService
         "every month",
         "per month",
         "/month",
-        "each month"
+        "/mo",
+        "billed monthly",
+        "charged monthly",
+        "monthly subscription"
     };
 
     private static readonly string[] YearlyPhrases =
@@ -116,7 +121,11 @@ public class SubscriptionDetectionService
         "annually",
         "every year",
         "per year",
-        "/year"
+        "/year",
+        "/yr",
+        "billed yearly",
+        "billed annually",
+        "annual subscription"
     };
 
     private static readonly string[] WeeklyPhrases =
@@ -124,7 +133,8 @@ public class SubscriptionDetectionService
         "weekly",
         "every week",
         "per week",
-        "/week"
+        "/week",
+        "billed weekly"
     };
 
     private static readonly string[] MarketingPhrases =
@@ -164,52 +174,85 @@ public class SubscriptionDetectionService
     public SubscriptionDetectionResult Detect(
         EmailCandidate email)
     {
-        var result = new SubscriptionDetectionResult();
+        var result =
+            new SubscriptionDetectionResult();
 
-        var subject = email.Subject ?? "";
-        var snippet = email.Snippet ?? "";
-        var from = email.From ?? "";
+        var subject =
+            email.Subject ?? "";
+
+        var snippet =
+            email.Snippet ?? "";
+
+        var body =
+            email.BodyText ?? "";
+
+        var from =
+            email.From ?? "";
+
+        // =====================================================
+        // Subject + Snippet + FULL EMAIL BODY
+        // =====================================================
+
+        var rawText =
+            $"{subject} {snippet} {body}";
 
         var text =
-            $"{subject} {snippet}".ToLowerInvariant();
+            rawText.ToLowerInvariant();
 
         var fromLower =
             from.ToLowerInvariant();
 
         var score = 0;
 
+        // =====================================================
         // Cancellation
+        // =====================================================
+
         var cancellation =
-            FindFirstMatch(text, CancellationPhrases);
+            FindFirstMatch(
+                text,
+                CancellationPhrases);
 
         if (cancellation != null)
         {
             score += 8;
 
-            result.SubscriptionStatus = "Canceled";
+            result.SubscriptionStatus =
+                "Canceled";
 
             result.Reasons.Add(
                 $"Cancellation signal: {cancellation}");
         }
 
+        // =====================================================
         // Activation
+        // =====================================================
+
         var activation =
-            FindFirstMatch(text, ActivationPhrases);
+            FindFirstMatch(
+                text,
+                ActivationPhrases);
 
         if (activation != null &&
             cancellation == null)
         {
             score += 5;
 
-            result.SubscriptionStatus = "Active";
+            result.SubscriptionStatus =
+                "Active";
 
             result.Reasons.Add(
                 $"Activation signal: {activation}");
         }
 
-        // Recurring
+        // =====================================================
+        // Recurring payment
+        // =====================================================
+
         var recurring =
-            FindFirstMatch(text, StrongRecurringPhrases);
+            FindFirstMatch(
+                text,
+                StrongRecurringPhrases);
 
         if (recurring != null)
         {
@@ -217,16 +260,22 @@ public class SubscriptionDetectionService
 
             if (result.SubscriptionStatus == "Unknown")
             {
-                result.SubscriptionStatus = "Active";
+                result.SubscriptionStatus =
+                    "Active";
             }
 
             result.Reasons.Add(
                 $"Recurring signal: {recurring}");
         }
 
+        // =====================================================
         // Future billing
+        // =====================================================
+
         var futureBilling =
-            FindFirstMatch(text, FutureBillingPhrases);
+            FindFirstMatch(
+                text,
+                FutureBillingPhrases);
 
         if (futureBilling != null)
         {
@@ -234,16 +283,36 @@ public class SubscriptionDetectionService
 
             if (result.SubscriptionStatus == "Unknown")
             {
-                result.SubscriptionStatus = "Active";
+                result.SubscriptionStatus =
+                    "Active";
             }
 
             result.Reasons.Add(
                 $"Future billing signal: {futureBilling}");
         }
 
+        // =====================================================
+        // Next Billing Date
+        // =====================================================
+
+        result.NextBillingDate =
+            ExtractNextBillingDate(rawText);
+
+        if (result.NextBillingDate.HasValue)
+        {
+            result.Reasons.Add(
+                $"Next billing date detected: " +
+                $"{result.NextBillingDate.Value:yyyy-MM-dd}");
+        }
+
+        // =====================================================
         // Trial
+        // =====================================================
+
         var trial =
-            FindFirstMatch(text, TrialPhrases);
+            FindFirstMatch(
+                text,
+                TrialPhrases);
 
         if (trial != null)
         {
@@ -251,7 +320,8 @@ public class SubscriptionDetectionService
 
             if (result.SubscriptionStatus == "Unknown")
             {
-                result.SubscriptionStatus = "Active";
+                result.SubscriptionStatus =
+                    "Active";
             }
 
             result.Reasons.Add(
@@ -267,9 +337,14 @@ public class SubscriptionDetectionService
                 "Premium service sender");
         }
 
-        // Generic subscription terminology
+        // =====================================================
+        // Subscription terminology
+        // =====================================================
+
         var subscriptionWord =
-            FindFirstMatch(text, SubscriptionWords);
+            FindFirstMatch(
+                text,
+                SubscriptionWords);
 
         if (subscriptionWord != null)
         {
@@ -279,9 +354,14 @@ public class SubscriptionDetectionService
                 $"Subscription terminology: {subscriptionWord}");
         }
 
+        // =====================================================
         // Payment
+        // =====================================================
+
         var payment =
-            FindFirstMatch(text, PaymentPhrases);
+            FindFirstMatch(
+                text,
+                PaymentPhrases);
 
         if (payment != null)
         {
@@ -291,7 +371,10 @@ public class SubscriptionDetectionService
                 $"Payment signal: {payment}");
         }
 
-        // Billing period
+        // =====================================================
+        // Billing cycle
+        // =====================================================
+
         result.BillingPeriod =
             DetectBillingPeriod(text);
 
@@ -303,23 +386,35 @@ public class SubscriptionDetectionService
                 $"Billing period: {result.BillingPeriod}");
         }
 
-        // Amount
+        // =====================================================
+        // Amount + Currency
+        // =====================================================
+
         result.Amount =
-            ExtractAmount(text, out var currency);
+            ExtractAmount(
+                text,
+                out var currency);
 
         if (result.Amount.HasValue)
         {
             score += 1;
 
-            result.Currency = currency;
+            result.Currency =
+                currency;
 
             result.Reasons.Add(
-                $"Price detected: {result.Amount} {currency}");
+                $"Price detected: " +
+                $"{result.Amount.Value} {currency}");
         }
 
+        // =====================================================
         // Refund penalty
+        // =====================================================
+
         var refund =
-            FindFirstMatch(text, RefundPhrases);
+            FindFirstMatch(
+                text,
+                RefundPhrases);
 
         if (refund != null &&
             cancellation == null)
@@ -330,7 +425,10 @@ public class SubscriptionDetectionService
                 $"Refund signal: {refund}");
         }
 
-        // One-off purchase penalty
+        // =====================================================
+        // One-off transaction penalty
+        // =====================================================
+
         var oneOff =
             FindFirstMatch(
                 text,
@@ -348,9 +446,14 @@ public class SubscriptionDetectionService
                 $"Possible one-off transaction: {oneOff}");
         }
 
+        // =====================================================
         // Marketing penalty
+        // =====================================================
+
         var marketing =
-            FindFirstMatch(text, MarketingPhrases);
+            FindFirstMatch(
+                text,
+                MarketingPhrases);
 
         if (marketing != null &&
             activation == null &&
@@ -365,8 +468,16 @@ public class SubscriptionDetectionService
                 $"Marketing signal: {marketing}");
         }
 
+        // =====================================================
+        // Merchant
+        // =====================================================
+
         result.Merchant =
             ExtractMerchant(from);
+
+        // =====================================================
+        // Final score
+        // =====================================================
 
         result.Score =
             Math.Max(score, 0);
@@ -385,6 +496,10 @@ public class SubscriptionDetectionService
         return result;
     }
 
+    // =========================================================
+    // Phrase matcher
+    // =========================================================
+
     private static string? FindFirstMatch(
         string text,
         IEnumerable<string> phrases)
@@ -396,23 +511,36 @@ public class SubscriptionDetectionService
                     StringComparison.OrdinalIgnoreCase));
     }
 
+    // =========================================================
+    // Billing period
+    // =========================================================
+
     private static string? DetectBillingPeriod(
         string text)
     {
         if (MonthlyPhrases.Any(
-            phrase => text.Contains(phrase)))
+            phrase =>
+                text.Contains(
+                    phrase,
+                    StringComparison.OrdinalIgnoreCase)))
         {
             return "Monthly";
         }
 
         if (YearlyPhrases.Any(
-            phrase => text.Contains(phrase)))
+            phrase =>
+                text.Contains(
+                    phrase,
+                    StringComparison.OrdinalIgnoreCase)))
         {
             return "Yearly";
         }
 
         if (WeeklyPhrases.Any(
-            phrase => text.Contains(phrase)))
+            phrase =>
+                text.Contains(
+                    phrase,
+                    StringComparison.OrdinalIgnoreCase)))
         {
             return "Weekly";
         }
@@ -420,13 +548,137 @@ public class SubscriptionDetectionService
         return null;
     }
 
+    // =========================================================
+    // Next billing date
+    // =========================================================
+
+    private static DateTime? ExtractNextBillingDate(
+        string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var patterns =
+            new[]
+            {
+                @"(?:the\s+)?next\s+(?:charge|payment|billing)\s+(?:will\s+be\s+)?(?:on\s+)?(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+                @"(?:you\s+)?will\s+be\s+charged\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+                @"renews\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+                @"renewal\s+date\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+                @"next\s+billing\s+date\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+                @"(?:the\s+)?next\s+(?:charge|payment|billing)\s+(?:will\s+be\s+)?(?:on\s+)?(?<date>\d{4}-\d{2}-\d{2})"
+            };
+
+        var formats =
+            new[]
+            {
+                "MMM d, yyyy",
+                "MMM dd, yyyy",
+                "MMMM d, yyyy",
+                "MMMM dd, yyyy",
+                "yyyy-MM-dd"
+            };
+
+        foreach (var pattern in patterns)
+        {
+            var match =
+                Regex.Match(
+                    text,
+                    pattern,
+                    RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var dateText =
+                match.Groups["date"]
+                    .Value
+                    .Trim();
+
+            if (DateTime.TryParseExact(
+                dateText,
+                formats,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var parsedDate))
+            {
+                return DateTime.SpecifyKind(
+                    parsedDate.Date,
+                    DateTimeKind.Utc);
+            }
+        }
+
+        return null;
+    }
+
+    // =========================================================
+    // Amount extraction
+    //
+    // Priority:
+    // "amount paid $20"
+    // "total €19.99"
+    // "charged $20"
+    // then generic currency patterns
+    // =========================================================
+
     private static decimal? ExtractAmount(
         string text,
         out string? currency)
     {
         currency = null;
 
-        var patterns =
+        var contextualPatterns =
+            new[]
+            {
+                @"(?:amount\s+paid|total\s+paid|total|charged|charge|price)\s*:?\s*(?<currency>€|\$|£|eur|usd|gbp)\s*(?<amount>\d+(?:[.,]\d{1,2})?)",
+
+                @"(?:amount\s+paid|total\s+paid|total|charged|charge|price)\s*:?\s*(?<amount>\d+(?:[.,]\d{1,2})?)\s*(?<currency>€|\$|£|eur|usd|gbp)"
+            };
+
+        foreach (var pattern in contextualPatterns)
+        {
+            var match =
+                Regex.Match(
+                    text,
+                    pattern,
+                    RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var amountText =
+                match.Groups["amount"]
+                    .Value
+                    .Replace(',', '.');
+
+            if (!decimal.TryParse(
+                amountText,
+                NumberStyles.Any,
+                CultureInfo.InvariantCulture,
+                out var amount))
+            {
+                continue;
+            }
+
+            currency =
+                NormalizeCurrency(
+                    match.Groups["currency"].Value);
+
+            return amount;
+        }
+
+        var genericPatterns =
             new Dictionary<string, string[]>
             {
                 {
@@ -455,7 +707,7 @@ public class SubscriptionDetectionService
                 }
             };
 
-        foreach (var currencyPatterns in patterns)
+        foreach (var currencyPatterns in genericPatterns)
         {
             foreach (var pattern in currencyPatterns.Value)
             {
@@ -491,6 +743,34 @@ public class SubscriptionDetectionService
 
         return null;
     }
+
+    // =========================================================
+    // Currency normalization
+    // =========================================================
+
+    private static string? NormalizeCurrency(
+        string value)
+    {
+        return value
+            .Trim()
+            .ToUpperInvariant() switch
+        {
+            "€" => "EUR",
+            "EUR" => "EUR",
+
+            "$" => "USD",
+            "USD" => "USD",
+
+            "£" => "GBP",
+            "GBP" => "GBP",
+
+            _ => null
+        };
+    }
+
+    // =========================================================
+    // Merchant extraction
+    // =========================================================
 
     private static string? ExtractMerchant(
         string from)
@@ -533,7 +813,8 @@ public class SubscriptionDetectionService
 
             if (!string.IsNullOrWhiteSpace(domain))
             {
-                return char.ToUpperInvariant(domain[0]) +
+                return char.ToUpperInvariant(
+                           domain[0]) +
                        domain[1..];
             }
         }

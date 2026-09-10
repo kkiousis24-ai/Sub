@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Google.Apis.Auth.OAuth2;
@@ -26,7 +27,7 @@ public class GoogleGmailService
     }
 
     // =========================================================
-    // Creates authenticated Gmail API client
+    // Create authenticated Gmail service
     // =========================================================
 
     private async Task<GmailService> CreateServiceAsync(
@@ -43,15 +44,11 @@ public class GoogleGmailService
             {
                 HttpClientInitializer = credential,
                 ApplicationName = "Sub"
-            }
-        );
+            });
     }
 
     // =========================================================
-    // Returns valid Google Access Token
-    //
-    // If current token is still valid -> use it
-    // If expired -> refresh automatically
+    // Get valid access token
     // =========================================================
 
     private async Task<string> GetValidAccessTokenAsync(
@@ -68,11 +65,6 @@ public class GoogleGmailService
             return account.AccessToken!;
         }
 
-        // =====================================================
-        // Access token expired
-        // Need refresh token
-        // =====================================================
-
         if (string.IsNullOrWhiteSpace(account.RefreshToken))
         {
             throw new InvalidOperationException(
@@ -84,41 +76,34 @@ public class GoogleGmailService
     }
 
     // =========================================================
-    // Refresh Google OAuth Access Token
+    // Refresh Google access token
     // =========================================================
 
     private async Task<string> RefreshAccessTokenAsync(
         ConnectedEmailAccount account)
     {
         var clientId =
-            _configuration[
-                "Authentication:Google:ClientId"
-            ];
+            _configuration["Authentication:Google:ClientId"];
 
         var clientSecret =
-            _configuration[
-                "Authentication:Google:ClientSecret"
-            ];
+            _configuration["Authentication:Google:ClientSecret"];
 
         if (string.IsNullOrWhiteSpace(clientId))
         {
             throw new InvalidOperationException(
-                "Google ClientId is missing."
-            );
+                "Google ClientId is missing.");
         }
 
         if (string.IsNullOrWhiteSpace(clientSecret))
         {
             throw new InvalidOperationException(
-                "Google ClientSecret is missing."
-            );
+                "Google ClientSecret is missing.");
         }
 
         if (string.IsNullOrWhiteSpace(account.RefreshToken))
         {
             throw new InvalidOperationException(
-                "Google refresh token is missing."
-            );
+                "Google refresh token is missing.");
         }
 
         var httpClient =
@@ -127,22 +112,10 @@ public class GoogleGmailService
         var requestData =
             new Dictionary<string, string>
             {
-                {
-                    "client_id",
-                    clientId
-                },
-                {
-                    "client_secret",
-                    clientSecret
-                },
-                {
-                    "refresh_token",
-                    account.RefreshToken
-                },
-                {
-                    "grant_type",
-                    "refresh_token"
-                }
+                { "client_id", clientId },
+                { "client_secret", clientSecret },
+                { "refresh_token", account.RefreshToken },
+                { "grant_type", "refresh_token" }
             };
 
         using var requestContent =
@@ -151,15 +124,10 @@ public class GoogleGmailService
         var response =
             await httpClient.PostAsync(
                 "https://oauth2.googleapis.com/token",
-                requestContent
-            );
+                requestContent);
 
         var responseContent =
             await response.Content.ReadAsStringAsync();
-
-        // =====================================================
-        // Google rejected refresh request
-        // =====================================================
 
         if (!response.IsSuccessStatusCode)
         {
@@ -173,33 +141,22 @@ public class GoogleGmailService
         try
         {
             tokenResponse =
-                JsonSerializer.Deserialize<
-                    GoogleTokenRefreshResponse>(
-                    responseContent
-                );
+                JsonSerializer.Deserialize<GoogleTokenRefreshResponse>(
+                    responseContent);
         }
         catch (JsonException ex)
         {
             throw new InvalidOperationException(
                 "Google returned an invalid token refresh response.",
-                ex
-            );
+                ex);
         }
 
-        if (
-            tokenResponse == null ||
-            string.IsNullOrWhiteSpace(
-                tokenResponse.AccessToken)
-        )
+        if (tokenResponse == null ||
+            string.IsNullOrWhiteSpace(tokenResponse.AccessToken))
         {
             throw new InvalidOperationException(
-                "Google did not return a new access token."
-            );
+                "Google did not return a new access token.");
         }
-
-        // =====================================================
-        // Update connected Gmail account
-        // =====================================================
 
         account.AccessToken =
             tokenResponse.AccessToken;
@@ -210,9 +167,7 @@ public class GoogleGmailService
                 : 3600;
 
         account.TokenExpiresAt =
-            DateTime.UtcNow.AddSeconds(
-                expiresInSeconds
-            );
+            DateTime.UtcNow.AddSeconds(expiresInSeconds);
 
         await _context.SaveChangesAsync();
 
@@ -236,22 +191,15 @@ public class GoogleGmailService
 
         return new GmailProfileResponse
         {
-            EmailAddress =
-                profile.EmailAddress,
-
-            MessagesTotal =
-                profile.MessagesTotal,
-
-            ThreadsTotal =
-                profile.ThreadsTotal,
-
-            HistoryId =
-                profile.HistoryId
+            EmailAddress = profile.EmailAddress,
+            MessagesTotal = profile.MessagesTotal,
+            ThreadsTotal = profile.ThreadsTotal,
+            HistoryId = profile.HistoryId
         };
     }
 
     // =========================================================
-    // Get subscription-related emails
+    // Subscription-related emails
     // =========================================================
 
     public async Task<List<GmailMessageResponse>>
@@ -263,10 +211,6 @@ public class GoogleGmailService
 
         var listRequest =
             gmailService.Users.Messages.List("me");
-
-        // =====================================================
-        // MVP Gmail search filter
-        // =====================================================
 
         listRequest.Q =
             "newer_than:2y {subscription renewal invoice receipt payment charged membership}";
@@ -284,10 +228,6 @@ public class GoogleGmailService
             return results;
         }
 
-        // =====================================================
-        // Retrieve message metadata
-        // =====================================================
-
         foreach (var item in listResponse.Messages)
         {
             if (string.IsNullOrWhiteSpace(item.Id))
@@ -298,22 +238,19 @@ public class GoogleGmailService
             var getRequest =
                 gmailService.Users.Messages.Get(
                     "me",
-                    item.Id
-                );
+                    item.Id);
+
+            // =================================================
+            // IMPORTANT
+            // Full instead of Metadata
+            // ώστε να μπορούμε να διαβάσουμε το email body.
+            // =================================================
 
             getRequest.Format =
                 UsersResource.MessagesResource
                     .GetRequest
                     .FormatEnum
-                    .Metadata;
-
-            getRequest.MetadataHeaders =
-                new[]
-                {
-                    "From",
-                    "Subject",
-                    "Date"
-                };
+                    .Full;
 
             Message message =
                 await getRequest.ExecuteAsync();
@@ -322,40 +259,20 @@ public class GoogleGmailService
                 message.Payload?.Headers;
 
             var from =
-                headers?
-                    .FirstOrDefault(
-                        h =>
-                            string.Equals(
-                                h.Name,
-                                "From",
-                                StringComparison.OrdinalIgnoreCase
-                            )
-                    )
-                    ?.Value;
+                GetHeader(headers, "From");
 
             var subject =
-                headers?
-                    .FirstOrDefault(
-                        h =>
-                            string.Equals(
-                                h.Name,
-                                "Subject",
-                                StringComparison.OrdinalIgnoreCase
-                            )
-                    )
-                    ?.Value;
+                GetHeader(headers, "Subject");
 
             var date =
-                headers?
-                    .FirstOrDefault(
-                        h =>
-                            string.Equals(
-                                h.Name,
-                                "Date",
-                                StringComparison.OrdinalIgnoreCase
-                            )
-                    )
-                    ?.Value;
+                GetHeader(headers, "Date");
+
+            // =================================================
+            // Extract readable body
+            // =================================================
+
+            var bodyText =
+                ExtractBodyText(message.Payload);
 
             results.Add(
                 new GmailMessageResponse
@@ -376,12 +293,214 @@ public class GoogleGmailService
                         date,
 
                     Snippet =
-                        message.Snippet
-                }
-            );
+                        message.Snippet,
+
+                    BodyText =
+                        bodyText
+                });
         }
 
         return results;
+    }
+
+    // =========================================================
+    // Header helper
+    // =========================================================
+
+    private static string? GetHeader(
+        IList<MessagePartHeader>? headers,
+        string headerName)
+    {
+        return headers?
+            .FirstOrDefault(
+                h => string.Equals(
+                    h.Name,
+                    headerName,
+                    StringComparison.OrdinalIgnoreCase))
+            ?.Value;
+    }
+
+    // =========================================================
+    // Extract message body recursively
+    //
+    // Gmail emails can be:
+    // text/plain
+    // text/html
+    // multipart/alternative
+    // multipart/mixed
+    // =========================================================
+
+    private static string ExtractBodyText(
+        MessagePart? payload)
+    {
+        if (payload == null)
+        {
+            return string.Empty;
+        }
+
+        var plainTextParts =
+            new List<string>();
+
+        var htmlParts =
+            new List<string>();
+
+        CollectBodyParts(
+            payload,
+            plainTextParts,
+            htmlParts);
+
+        // Prefer plain text.
+        if (plainTextParts.Count > 0)
+        {
+            return string.Join(
+                Environment.NewLine,
+                plainTextParts);
+        }
+
+        // Fallback to HTML converted to readable text.
+        if (htmlParts.Count > 0)
+        {
+            var html =
+                string.Join(
+                    Environment.NewLine,
+                    htmlParts);
+
+            return ConvertHtmlToText(html);
+        }
+
+        return string.Empty;
+    }
+
+    // =========================================================
+    // Walk Gmail MIME structure
+    // =========================================================
+
+    private static void CollectBodyParts(
+        MessagePart part,
+        List<string> plainTextParts,
+        List<string> htmlParts)
+    {
+        var mimeType =
+            part.MimeType?.ToLowerInvariant();
+
+        if (!string.IsNullOrWhiteSpace(
+            part.Body?.Data))
+        {
+            var decoded =
+                DecodeBase64Url(
+                    part.Body.Data);
+
+            if (!string.IsNullOrWhiteSpace(decoded))
+            {
+                if (mimeType == "text/plain")
+                {
+                    plainTextParts.Add(decoded);
+                }
+                else if (mimeType == "text/html")
+                {
+                    htmlParts.Add(decoded);
+                }
+            }
+        }
+
+        if (part.Parts == null)
+        {
+            return;
+        }
+
+        foreach (var childPart in part.Parts)
+        {
+            CollectBodyParts(
+                childPart,
+                plainTextParts,
+                htmlParts);
+        }
+    }
+
+    // =========================================================
+    // Gmail uses Base64 URL encoding
+    // =========================================================
+
+    private static string DecodeBase64Url(
+        string encoded)
+    {
+        if (string.IsNullOrWhiteSpace(encoded))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var base64 =
+                encoded
+                    .Replace('-', '+')
+                    .Replace('_', '/');
+
+            switch (base64.Length % 4)
+            {
+                case 2:
+                    base64 += "==";
+                    break;
+
+                case 3:
+                    base64 += "=";
+                    break;
+            }
+
+            var bytes =
+                Convert.FromBase64String(base64);
+
+            return Encoding.UTF8.GetString(bytes);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    // =========================================================
+    // Basic HTML -> readable text
+    // Δεν αποθηκεύουμε HTML.
+    // =========================================================
+
+    private static string ConvertHtmlToText(
+        string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            return string.Empty;
+        }
+
+        var text =
+            System.Text.RegularExpressions.Regex.Replace(
+                html,
+                @"<script[\s\S]*?</script>",
+                " ",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        text =
+            System.Text.RegularExpressions.Regex.Replace(
+                text,
+                @"<style[\s\S]*?</style>",
+                " ",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        text =
+            System.Text.RegularExpressions.Regex.Replace(
+                text,
+                @"<[^>]+>",
+                " ");
+
+        text =
+            System.Net.WebUtility.HtmlDecode(text);
+
+        text =
+            System.Text.RegularExpressions.Regex.Replace(
+                text,
+                @"\s+",
+                " ");
+
+        return text.Trim();
     }
 
     // =========================================================
@@ -436,4 +555,6 @@ public class GmailMessageResponse
     public string? Date { get; set; }
 
     public string? Snippet { get; set; }
+
+    public string? BodyText { get; set; }
 }
