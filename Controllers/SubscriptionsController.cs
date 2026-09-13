@@ -170,6 +170,13 @@ public class SubscriptionsController : ControllerBase
                     Snippet =
                         email.Snippet ?? string.Empty,
 
+                    // =========================================
+                    // Full Gmail body
+                    // =========================================
+
+                    BodyText =
+                        email.BodyText ?? string.Empty,
+
                     Date =
                         ParseGmailDate(email.Date)
                 })
@@ -307,7 +314,6 @@ public class SubscriptionsController : ControllerBase
                                 billingCycle,
 
                             // ---------------------------------
-                            // NEW:
                             // Save next billing date when active.
                             // A canceled subscription should not
                             // retain a future billing date.
@@ -527,7 +533,6 @@ public class SubscriptionsController : ControllerBase
                         BillingPeriod =
                             detection.BillingPeriod,
 
-                        // NEW
                         NextBillingDate =
                             detection.NextBillingDate,
 
