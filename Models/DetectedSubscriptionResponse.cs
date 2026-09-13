@@ -12,6 +12,10 @@ public class DetectedSubscriptionResponse
 
     public string? Merchant { get; set; }
 
+    public string? PlanName { get; set; }
+
+    public string EventType { get; set; } = "Unknown";
+
     public decimal? Amount { get; set; }
 
     public string? Currency { get; set; }

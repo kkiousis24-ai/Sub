@@ -215,7 +215,7 @@ public class GoogleGmailService
         listRequest.Q =
             "newer_than:2y {subscription renewal invoice receipt payment charged membership}";
 
-        listRequest.MaxResults = 25;
+        listRequest.MaxResults = 100;
 
         var listResponse =
             await listRequest.ExecuteAsync();

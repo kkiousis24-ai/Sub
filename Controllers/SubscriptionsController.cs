@@ -29,11 +29,13 @@ public class SubscriptionsController : ControllerBase
     // =========================================================
 
     [HttpGet]
-    public async Task<ActionResult<IEnumerable<Subscription>>> GetSubscriptions()
+    public async Task<ActionResult<IEnumerable<Subscription>>>
+        GetSubscriptions()
     {
-        var subscriptions = await _context.Subscriptions
-            .OrderByDescending(s => s.CreatedAt)
-            .ToListAsync();
+        var subscriptions =
+            await _context.Subscriptions
+                .OrderByDescending(s => s.CreatedAt)
+                .ToListAsync();
 
         return Ok(subscriptions);
     }
@@ -43,10 +45,12 @@ public class SubscriptionsController : ControllerBase
     // =========================================================
 
     [HttpGet("{id}")]
-    public async Task<ActionResult<Subscription>> GetSubscription(int id)
+    public async Task<ActionResult<Subscription>>
+        GetSubscription(int id)
     {
-        var subscription = await _context.Subscriptions
-            .FirstOrDefaultAsync(s => s.Id == id);
+        var subscription =
+            await _context.Subscriptions
+                .FirstOrDefaultAsync(s => s.Id == id);
 
         if (subscription == null)
         {
@@ -65,10 +69,12 @@ public class SubscriptionsController : ControllerBase
     // =========================================================
 
     [HttpPost]
-    public async Task<ActionResult<Subscription>> CreateSubscription(
-        [FromBody] Subscription subscription)
+    public async Task<ActionResult<Subscription>>
+        CreateSubscription(
+            [FromBody] Subscription subscription)
     {
-        if (string.IsNullOrWhiteSpace(subscription.Merchant))
+        if (string.IsNullOrWhiteSpace(
+            subscription.Merchant))
         {
             return BadRequest(new
             {
@@ -87,12 +93,14 @@ public class SubscriptionsController : ControllerBase
         subscription.Id = 0;
         subscription.CreatedAt = DateTime.UtcNow;
 
-        if (string.IsNullOrWhiteSpace(subscription.Currency))
+        if (string.IsNullOrWhiteSpace(
+            subscription.Currency))
         {
             subscription.Currency = "EUR";
         }
 
-        if (string.IsNullOrWhiteSpace(subscription.Status))
+        if (string.IsNullOrWhiteSpace(
+            subscription.Status))
         {
             subscription.Status = "Active";
         }
@@ -103,7 +111,10 @@ public class SubscriptionsController : ControllerBase
 
         return CreatedAtAction(
             nameof(GetSubscription),
-            new { id = subscription.Id },
+            new
+            {
+                id = subscription.Id
+            },
             subscription
         );
     }
@@ -115,11 +126,11 @@ public class SubscriptionsController : ControllerBase
     // ↓
     // Detection Engine
     // ↓
-    // Deduplication
+    // Email Deduplication
     // ↓
-    // Subscription status handling
+    // Safe Subscription Grouping
     // ↓
-    // Next Billing Date
+    // Status Handling
     // ↓
     // Evidence
     // ↓
@@ -127,18 +138,21 @@ public class SubscriptionsController : ControllerBase
     // =========================================================
 
     [HttpPost("scan")]
-    public async Task<IActionResult> ScanSubscriptions()
+    public async Task<IActionResult>
+        ScanSubscriptions()
     {
-        var account = await _context.ConnectedEmailAccounts
-            .FirstOrDefaultAsync(a =>
-                a.Provider == "Google" &&
-                a.IsActive);
+        var account =
+            await _context.ConnectedEmailAccounts
+                .FirstOrDefaultAsync(a =>
+                    a.Provider == "Google" &&
+                    a.IsActive);
 
         if (account == null)
         {
             return BadRequest(new
             {
-                message = "No connected Gmail account was found."
+                message =
+                    "No connected Gmail account was found."
             });
         }
 
@@ -149,43 +163,55 @@ public class SubscriptionsController : ControllerBase
             // =================================================
 
             var emails =
-                await _gmailService.GetSubscriptionEmailsAsync(account);
+                await _gmailService
+                    .GetSubscriptionEmailsAsync(account);
 
             // =================================================
             // 2. Parse + sort oldest -> newest
+            //
+            // This is important because:
+            //
+            // Cancellation -> Activation -> Renewal
+            //
+            // should be processed chronologically.
             // =================================================
 
-            var candidates = emails
-                .Select(email => new EmailCandidate
-                {
-                    GmailMessageId =
-                        email.MessageId ?? string.Empty,
+            var candidates =
+                emails
+                    .Select(email =>
+                        new EmailCandidate
+                        {
+                            GmailMessageId =
+                                email.MessageId ??
+                                string.Empty,
 
-                    From =
-                        email.From ?? string.Empty,
+                            From =
+                                email.From ??
+                                string.Empty,
 
-                    Subject =
-                        email.Subject ?? string.Empty,
+                            Subject =
+                                email.Subject ??
+                                string.Empty,
 
-                    Snippet =
-                        email.Snippet ?? string.Empty,
+                            Snippet =
+                                email.Snippet ??
+                                string.Empty,
 
-                    // =========================================
-                    // Full Gmail body
-                    // =========================================
+                            BodyText =
+                                email.BodyText ??
+                                string.Empty,
 
-                    BodyText =
-                        email.BodyText ?? string.Empty,
-
-                    Date =
-                        ParseGmailDate(email.Date)
-                })
-                .Where(x =>
-                    !string.IsNullOrWhiteSpace(
-                        x.GmailMessageId))
-                .OrderBy(x =>
-                    x.Date ?? DateTime.MinValue)
-                .ToList();
+                            Date =
+                                ParseGmailDate(
+                                    email.Date)
+                        })
+                    .Where(x =>
+                        !string.IsNullOrWhiteSpace(
+                            x.GmailMessageId))
+                    .OrderBy(x =>
+                        x.Date ??
+                        DateTime.MinValue)
+                    .ToList();
 
             var detectedSubscriptions =
                 new List<DetectedSubscriptionResponse>();
@@ -215,6 +241,7 @@ public class SubscriptionsController : ControllerBase
                 if (evidenceAlreadyExists)
                 {
                     skippedDuplicateEmails++;
+
                     continue;
                 }
 
@@ -236,8 +263,11 @@ public class SubscriptionsController : ControllerBase
                         ? "Unknown"
                         : detection.Merchant.Trim();
 
-                var normalizedMerchant =
-                    merchant.ToLowerInvariant();
+                var detectedPlanName =
+                    string.IsNullOrWhiteSpace(
+                        detection.PlanName)
+                        ? null
+                        : detection.PlanName.Trim();
 
                 var currency =
                     string.IsNullOrWhiteSpace(
@@ -251,14 +281,42 @@ public class SubscriptionsController : ControllerBase
                     string.IsNullOrWhiteSpace(
                         detection.BillingPeriod)
                         ? "Unknown"
-                        : detection.BillingPeriod;
+                        : detection.BillingPeriod.Trim();
+
+                // =============================================
+                // Status
+                //
+                // EventType has priority because it represents
+                // the meaning of this specific email.
+                // =============================================
 
                 var detectedStatus =
-                    detection.SubscriptionStatus switch
+                    detection.EventType switch
                     {
-                        "Canceled" => "Canceled",
-                        "Active" => "Active",
-                        _ => "Active"
+                        "Cancellation" =>
+                            "Canceled",
+
+                        "Activation" =>
+                            "Active",
+
+                        "Renewal" =>
+                            "Active",
+
+                        "Trial" =>
+                            "Active",
+
+                        _ =>
+                            detection.SubscriptionStatus switch
+                            {
+                                "Canceled" =>
+                                    "Canceled",
+
+                                "Active" =>
+                                    "Active",
+
+                                _ =>
+                                    "Active"
+                            }
                     };
 
                 var confidenceScore =
@@ -268,20 +326,16 @@ public class SubscriptionsController : ControllerBase
                     );
 
                 // =============================================
-                // Find existing subscription
+                // Find existing subscription safely
                 // =============================================
 
                 var subscription =
-                    await _context.Subscriptions
-                        .FirstOrDefaultAsync(s =>
-                            s.UserId ==
-                            account.UserId &&
-
-                            s.ConnectedEmailAccountId ==
-                            account.Id &&
-
-                            s.Merchant.ToLower() ==
-                            normalizedMerchant);
+                    await FindMatchingSubscriptionAsync(
+                        account.UserId,
+                        account.Id,
+                        merchant,
+                        detectedPlanName,
+                        detection.EventType);
 
                 // =============================================
                 // CREATE
@@ -302,10 +356,11 @@ public class SubscriptionsController : ControllerBase
                                 merchant,
 
                             PlanName =
-                                null,
+                                detectedPlanName,
 
                             Amount =
-                                detection.Amount ?? 0m,
+                                detection.Amount ??
+                                0m,
 
                             Currency =
                                 currency,
@@ -313,16 +368,12 @@ public class SubscriptionsController : ControllerBase
                             BillingCycle =
                                 billingCycle,
 
-                            // ---------------------------------
-                            // Save next billing date when active.
-                            // A canceled subscription should not
-                            // retain a future billing date.
-                            // ---------------------------------
-
                             NextBillingDate =
-                                detectedStatus == "Canceled"
+                                detectedStatus ==
+                                "Canceled"
                                     ? null
-                                    : detection.NextBillingDate,
+                                    : detection
+                                        .NextBillingDate,
 
                             Status =
                                 detectedStatus,
@@ -340,12 +391,14 @@ public class SubscriptionsController : ControllerBase
                     _context.Subscriptions.Add(
                         subscription);
 
-                    // Χρειαζόμαστε ID για το evidence
+                    // Χρειαζόμαστε το ID
+                    // πριν δημιουργήσουμε evidence.
                     await _context.SaveChangesAsync();
 
                     newSubscriptions++;
 
-                    if (detectedStatus == "Canceled")
+                    if (detectedStatus ==
+                        "Canceled")
                     {
                         canceledSubscriptions++;
                     }
@@ -358,7 +411,8 @@ public class SubscriptionsController : ControllerBase
                 else
                 {
                     var latestEvidence =
-                        await _context.SubscriptionEvidences
+                        await _context
+                            .SubscriptionEvidences
                             .Where(e =>
                                 e.SubscriptionId ==
                                 subscription.Id)
@@ -374,12 +428,16 @@ public class SubscriptionsController : ControllerBase
                     var currentEmailDate =
                         candidate.Date;
 
-                    // Ενημέρωση status μόνο όταν το email
-                    // δεν είναι παλαιότερο από το τελευταίο.
+                    // -----------------------------------------
+                    // Do not allow an older email to overwrite
+                    // the latest known status.
+                    // -----------------------------------------
+
                     var canUpdateStatus =
                         latestKnownDate == null ||
                         currentEmailDate == null ||
-                        currentEmailDate >= latestKnownDate;
+                        currentEmailDate >=
+                        latestKnownDate;
 
                     if (canUpdateStatus)
                     {
@@ -390,37 +448,64 @@ public class SubscriptionsController : ControllerBase
                             detectedStatus;
 
                         if (
-                            detectedStatus == "Canceled" &&
-                            oldStatus != "Canceled")
+                            detectedStatus ==
+                            "Canceled" &&
+                            oldStatus !=
+                            "Canceled")
                         {
                             canceledSubscriptions++;
                         }
 
                         // =====================================
                         // Next Billing Date
-                        //
-                        // Cancellation -> clear date
-                        // Active + date detected -> save date
                         // =====================================
 
-                        if (detectedStatus == "Canceled")
+                        if (detectedStatus ==
+                            "Canceled")
                         {
-                            subscription.NextBillingDate =
+                            subscription
+                                .NextBillingDate =
                                 null;
                         }
                         else if (
-                            detection.NextBillingDate.HasValue)
+                            detection
+                                .NextBillingDate
+                                .HasValue)
                         {
-                            subscription.NextBillingDate =
-                                detection.NextBillingDate.Value;
+                            subscription
+                                .NextBillingDate =
+                                detection
+                                    .NextBillingDate
+                                    .Value;
                         }
+                    }
+
+                    // =========================================
+                    // Plan Name
+                    //
+                    // We only fill an empty PlanName here.
+                    //
+                    // We never replace a specific Twitch
+                    // channel such as "lagmasterpiece"
+                    // with a generic "Tier 1..." value.
+                    // =========================================
+
+                    if (
+                        string.IsNullOrWhiteSpace(
+                            subscription.PlanName) &&
+                        !string.IsNullOrWhiteSpace(
+                            detectedPlanName))
+                    {
+                        subscription.PlanName =
+                            detectedPlanName;
                     }
 
                     // =========================================
                     // Amount
                     // =========================================
 
-                    if (detection.Amount.HasValue &&
+                    if (
+                        detection.Amount.HasValue &&
                         detection.Amount.Value > 0)
                     {
                         subscription.Amount =
@@ -431,8 +516,9 @@ public class SubscriptionsController : ControllerBase
                     // Currency
                     // =========================================
 
-                    if (!string.IsNullOrWhiteSpace(
-                        detection.Currency))
+                    if (
+                        !string.IsNullOrWhiteSpace(
+                            detection.Currency))
                     {
                         subscription.Currency =
                             currency;
@@ -442,7 +528,8 @@ public class SubscriptionsController : ControllerBase
                     // Billing Cycle
                     // =========================================
 
-                    if (billingCycle != "Unknown")
+                    if (billingCycle !=
+                        "Unknown")
                     {
                         subscription.BillingCycle =
                             billingCycle;
@@ -452,10 +539,12 @@ public class SubscriptionsController : ControllerBase
                     // Confidence
                     // =========================================
 
-                    if (confidenceScore >
+                    if (
+                        confidenceScore >
                         subscription.ConfidenceScore)
                     {
-                        subscription.ConfidenceScore =
+                        subscription
+                            .ConfidenceScore =
                             confidenceScore;
                     }
 
@@ -524,6 +613,12 @@ public class SubscriptionsController : ControllerBase
                         Merchant =
                             detection.Merchant,
 
+                        PlanName =
+                            detection.PlanName,
+
+                        EventType =
+                            detection.EventType,
+
                         Amount =
                             detection.Amount,
 
@@ -562,7 +657,8 @@ public class SubscriptionsController : ControllerBase
 
             var orderedResults =
                 detectedSubscriptions
-                    .OrderByDescending(x => x.Score)
+                    .OrderByDescending(x =>
+                        x.Score)
                     .ToList();
 
             return Ok(new
@@ -604,7 +700,8 @@ public class SubscriptionsController : ControllerBase
         catch (Exception ex)
         {
             return StatusCode(
-                StatusCodes.Status500InternalServerError,
+                StatusCodes
+                    .Status500InternalServerError,
                 new
                 {
                     message =
@@ -617,22 +714,220 @@ public class SubscriptionsController : ControllerBase
     }
 
     // =========================================================
+    // SAFE SUBSCRIPTION MATCHING
+    // =========================================================
+
+    private async Task<Subscription?>
+        FindMatchingSubscriptionAsync(
+            int userId,
+            int connectedEmailAccountId,
+            string merchant,
+            string? detectedPlanName,
+            string eventType)
+    {
+        var normalizedMerchant =
+            merchant
+                .Trim()
+                .ToLowerInvariant();
+
+        var merchantSubscriptions =
+            await _context.Subscriptions
+                .Where(s =>
+                    s.UserId ==
+                    userId &&
+
+                    s.ConnectedEmailAccountId ==
+                    connectedEmailAccountId &&
+
+                    s.Merchant.ToLower() ==
+                    normalizedMerchant)
+                .ToListAsync();
+
+        if (merchantSubscriptions.Count == 0)
+        {
+            return null;
+        }
+
+        // =====================================================
+        // TWITCH
+        //
+        // Twitch is special because:
+        //
+        // "lagmasterpiece"
+        //      = real channel identity
+        //
+        // "Tier 1 - 1 Month Subscription - GR"
+        //      = generic product/plan
+        //
+        // The Tier text does NOT identify the channel.
+        // =====================================================
+
+        if (merchant.Equals(
+            "Twitch",
+            StringComparison.OrdinalIgnoreCase))
+        {
+            // -------------------------------------------------
+            // Specific Twitch channel
+            // -------------------------------------------------
+
+            if (
+                !string.IsNullOrWhiteSpace(
+                    detectedPlanName) &&
+                !IsGenericTwitchPlanName(
+                    detectedPlanName))
+            {
+                return merchantSubscriptions
+                    .FirstOrDefault(s =>
+                        PlanNamesEqual(
+                            s.PlanName,
+                            detectedPlanName));
+            }
+
+            // -------------------------------------------------
+            // Generic Twitch Tier plan
+            // -------------------------------------------------
+
+            if (
+                !string.IsNullOrWhiteSpace(
+                    detectedPlanName) &&
+                IsGenericTwitchPlanName(
+                    detectedPlanName))
+            {
+                var genericMatches =
+                    merchantSubscriptions
+                        .Where(s =>
+                            PlanNamesEqual(
+                                s.PlanName,
+                                detectedPlanName))
+                        .ToList();
+
+                // Activation represents a new purchase.
+                //
+                // Do not automatically merge it with an older
+                // channel simply because the merchant is Twitch.
+                if (eventType.Equals(
+                    "Activation",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                // Renewal / Cancellation can update an existing
+                // generic subscription only when there is
+                // exactly one possible generic match.
+                if (genericMatches.Count == 1)
+                {
+                    return genericMatches[0];
+                }
+
+                // Multiple generic matches means ambiguity.
+                // Do not guess.
+                return null;
+            }
+
+            // -------------------------------------------------
+            // Twitch email without any usable PlanName
+            // -------------------------------------------------
+
+            return null;
+        }
+
+        // =====================================================
+        // OTHER MERCHANTS
+        // =====================================================
+
+        if (!string.IsNullOrWhiteSpace(
+            detectedPlanName))
+        {
+            var exactPlanMatch =
+                merchantSubscriptions
+                    .FirstOrDefault(s =>
+                        PlanNamesEqual(
+                            s.PlanName,
+                            detectedPlanName));
+
+            if (exactPlanMatch != null)
+            {
+                return exactPlanMatch;
+            }
+        }
+
+        // For other merchants, merchant-only matching is used
+        // only when there is exactly one possible subscription.
+        if (merchantSubscriptions.Count == 1)
+        {
+            return merchantSubscriptions[0];
+        }
+
+        return null;
+    }
+
+    // =========================================================
+    // Twitch generic plan detector
+    // =========================================================
+
+    private static bool
+        IsGenericTwitchPlanName(
+            string? planName)
+    {
+        if (string.IsNullOrWhiteSpace(
+            planName))
+        {
+            return false;
+        }
+
+        return
+            planName.StartsWith(
+                "Tier ",
+                StringComparison.OrdinalIgnoreCase) &&
+
+            planName.Contains(
+                "Subscription",
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    // =========================================================
+    // Plan comparison
+    // =========================================================
+
+    private static bool
+        PlanNamesEqual(
+            string? first,
+            string? second)
+    {
+        if (
+            string.IsNullOrWhiteSpace(first) ||
+            string.IsNullOrWhiteSpace(second))
+        {
+            return false;
+        }
+
+        return first.Trim().Equals(
+            second.Trim(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    // =========================================================
     // PUT: api/subscriptions/1
     // =========================================================
 
     [HttpPut("{id}")]
-    public async Task<ActionResult<Subscription>> UpdateSubscription(
-        int id,
-        [FromBody] Subscription updatedSubscription)
+    public async Task<ActionResult<Subscription>>
+        UpdateSubscription(
+            int id,
+            [FromBody]
+            Subscription updatedSubscription)
     {
         var subscription =
-            await _context.Subscriptions.FindAsync(id);
+            await _context.Subscriptions
+                .FindAsync(id);
 
         if (subscription == null)
         {
             return NotFound(new
             {
-                message = "Subscription not found."
+                message =
+                    "Subscription not found."
             });
         }
 
@@ -640,7 +935,8 @@ public class SubscriptionsController : ControllerBase
             updatedSubscription.UserId;
 
         subscription.ConnectedEmailAccountId =
-            updatedSubscription.ConnectedEmailAccountId;
+            updatedSubscription
+                .ConnectedEmailAccountId;
 
         subscription.Merchant =
             updatedSubscription.Merchant;
@@ -664,10 +960,12 @@ public class SubscriptionsController : ControllerBase
             updatedSubscription.Status;
 
         subscription.ConfidenceScore =
-            updatedSubscription.ConfidenceScore;
+            updatedSubscription
+                .ConfidenceScore;
 
         subscription.CancellationUrl =
-            updatedSubscription.CancellationUrl;
+            updatedSubscription
+                .CancellationUrl;
 
         await _context.SaveChangesAsync();
 
@@ -679,16 +977,19 @@ public class SubscriptionsController : ControllerBase
     // =========================================================
 
     [HttpDelete("{id}")]
-    public async Task<IActionResult> DeleteSubscription(int id)
+    public async Task<IActionResult>
+        DeleteSubscription(int id)
     {
         var subscription =
-            await _context.Subscriptions.FindAsync(id);
+            await _context.Subscriptions
+                .FindAsync(id);
 
         if (subscription == null)
         {
             return NotFound(new
             {
-                message = "Subscription not found."
+                message =
+                    "Subscription not found."
             });
         }
 
@@ -704,10 +1005,12 @@ public class SubscriptionsController : ControllerBase
     // Gmail Date Parser
     // =========================================================
 
-    private static DateTime? ParseGmailDate(
-        string? gmailDate)
+    private static DateTime?
+        ParseGmailDate(
+            string? gmailDate)
     {
-        if (string.IsNullOrWhiteSpace(gmailDate))
+        if (string.IsNullOrWhiteSpace(
+            gmailDate))
         {
             return null;
         }

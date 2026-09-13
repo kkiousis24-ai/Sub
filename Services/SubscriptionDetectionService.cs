@@ -70,9 +70,6 @@ public class SubscriptionDetectionService
 
     // =========================================================
     // Strong trial signals
-    //
-    // These imply that a trial actually exists.
-    // "Free trial" alone is NOT enough.
     // =========================================================
 
     private static readonly string[] StrongTrialPhrases =
@@ -253,12 +250,8 @@ public class SubscriptionDetectionService
             email.From ?? string.Empty;
 
         // =====================================================
-        // IMPORTANT
-        //
         // Subject + snippet = PRIMARY evidence
         // Full body         = SECONDARY evidence
-        //
-        // We no longer treat all three with the same weight.
         // =====================================================
 
         var primaryRawText =
@@ -443,9 +436,6 @@ public class SubscriptionDetectionService
 
         // =====================================================
         // Next Billing Date
-        //
-        // Prefer subject/snippet first.
-        // Only then search full body.
         // =====================================================
 
         result.NextBillingDate =
@@ -509,10 +499,39 @@ public class SubscriptionDetectionService
         }
 
         // =====================================================
+        // Event Type
+        // =====================================================
+
+        if (cancellation != null)
+        {
+            result.EventType =
+                "Cancellation";
+        }
+        else if (activation != null)
+        {
+            result.EventType =
+                "Activation";
+        }
+        else if (recurring != null ||
+                 primaryFutureBilling != null)
+        {
+            result.EventType =
+                "Renewal";
+        }
+        else if (primaryStrongTrial != null ||
+                 bodyStrongTrial != null)
+        {
+            result.EventType =
+                "Trial";
+        }
+        else
+        {
+            result.EventType =
+                "Unknown";
+        }
+
+        // =====================================================
         // Weak trial terminology
-        //
-        // "Free trial" alone should not make an email
-        // a subscription.
         // =====================================================
 
         var primaryWeakTrial =
@@ -642,9 +661,6 @@ public class SubscriptionDetectionService
 
         // =====================================================
         // Amount + Currency
-        //
-        // Prefer subject/snippet.
-        // Fall back to body.
         // =====================================================
 
         result.Amount =
@@ -756,13 +772,6 @@ public class SubscriptionDetectionService
 
         // =====================================================
         // Marketing detection
-        //
-        // Marketing in the SUBJECT is especially important.
-        // Example:
-        // "Last chance: save 40%"
-        //
-        // Promotional terms in a footer must not be enough
-        // to create a subscription.
         // =====================================================
 
         var subjectMarketing =
@@ -835,6 +844,27 @@ public class SubscriptionDetectionService
             ExtractMerchant(from);
 
         // =====================================================
+        // Plan Name
+        //
+        // For now we use conservative extraction.
+        // Twitch channel names can identify separate
+        // subscriptions from the same merchant.
+        // =====================================================
+
+        result.PlanName =
+            ExtractPlanName(
+                subject,
+                body,
+                result.Merchant);
+
+        if (!string.IsNullOrWhiteSpace(
+            result.PlanName))
+        {
+            result.Reasons.Add(
+                $"Plan detected: {result.PlanName}");
+        }
+
+        // =====================================================
         // Final score
         // =====================================================
 
@@ -845,18 +875,6 @@ public class SubscriptionDetectionService
 
         // =====================================================
         // Final validation
-        //
-        // A high score is NOT enough by itself.
-        //
-        // We require at least one real subscription event:
-        // - activation
-        // - recurring renewal
-        // - cancellation
-        // - confirmed trial
-        // - strong future billing in subject/snippet
-        //
-        // This blocks promotional emails whose body only
-        // contains generic pricing / subscription language.
         // =====================================================
 
         var hasRealSubscriptionEvidence =
@@ -907,10 +925,6 @@ public class SubscriptionDetectionService
 
     // =========================================================
     // Marketing detector
-    //
-    // Also catches phrases such as:
-    // "save 40%"
-    // "30% off"
     // =========================================================
 
     private static string? FindMarketingSignal(
@@ -1072,12 +1086,6 @@ public class SubscriptionDetectionService
 
     // =========================================================
     // Amount extraction
-    //
-    // Priority:
-    // "amount paid $20"
-    // "total €19.99"
-    // "charged $20"
-    // then generic currency patterns
     // =========================================================
 
     private static decimal? ExtractAmount(
@@ -1275,5 +1283,224 @@ public class SubscriptionDetectionService
         }
 
         return from;
+    }
+
+    // =========================================================
+    // Plan Name extraction
+    //
+    // We deliberately keep this conservative.
+    //
+    // For Twitch we expect phrases such as:
+    //
+    // "Your subscription to lagmasterpiece has been canceled"
+    // "Your subscription to lagmasterpiece will renew"
+    //
+    // That lets us distinguish:
+    //
+    // Twitch / streamer A
+    // Twitch / streamer B
+    //
+    // instead of merging every Twitch subscription together.
+    // =========================================================
+
+    private static string? ExtractPlanName(
+        string subject,
+        string body,
+        string? merchant)
+    {
+        if (string.IsNullOrWhiteSpace(merchant))
+        {
+            return null;
+        }
+
+        // For now, use sentence-based extraction only for Twitch.
+        // This prevents phrases from unrelated companies
+        // accidentally becoming PlanName values.
+        if (!merchant.Contains(
+                "twitch",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var subjectPlan =
+            ExtractTwitchPlanFromText(subject);
+
+        if (!string.IsNullOrWhiteSpace(subjectPlan))
+        {
+            return subjectPlan;
+        }
+
+        var bodyPlan =
+            ExtractTwitchPlanFromText(body);
+
+        if (!string.IsNullOrWhiteSpace(bodyPlan))
+        {
+            return bodyPlan;
+        }
+
+        return null;
+    }
+
+    // =========================================================
+    // Twitch Plan / Channel extraction
+    // =========================================================
+
+private static string? ExtractTwitchPlanFromText(
+    string text)
+{
+    if (string.IsNullOrWhiteSpace(text))
+    {
+        return null;
+    }
+
+    // =========================================================
+    // 1. Twitch channel / streamer
+    //
+    // Real examples:
+    //
+    // "Your lagmasterpiece Subscription Cancellation Confirmation"
+    //
+    // "This email confirms your recent cancellation
+    //  to lagmasterpiece."
+    //
+    // Channel name has priority over the generic Tier plan.
+    // =========================================================
+
+    var channelPatterns =
+        new[]
+        {
+            @"\byour\s+(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\s+subscription\s+cancellation\s+confirmation\b",
+
+            @"\bcancellation\s+to\s+(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\b",
+
+            @"\bsubscription\s+to\s+channel\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
+
+            @"\bsubscribed\s+to\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
+
+            @"\bsubscription\s+for\s+channel\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?"
+        };
+
+    foreach (var pattern in channelPatterns)
+    {
+        var match =
+            Regex.Match(
+                text,
+                pattern,
+                RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            continue;
+        }
+
+        var plan =
+            match.Groups["plan"]
+                .Value
+                .Trim()
+                .Trim('"', '\'', '.', ',', ':', ';');
+
+        if (IsValidPlanName(plan))
+        {
+            return plan;
+        }
+    }
+
+    // =========================================================
+    // 2. Twitch plan from invoice
+    //
+    // Real example:
+    // "Your Plan: Tier 1 - 1 Month Subscription - GR"
+    // =========================================================
+
+    var labelledPlanMatch =
+        Regex.Match(
+            text,
+            @"\byour\s+plan\s*:\s*(?<plan>Tier\s+\d+\s*-\s*\d+\s+Months?\s+Subscription\s*-\s*[A-Za-z]{2})",
+            RegexOptions.IgnoreCase);
+
+    if (labelledPlanMatch.Success)
+    {
+        var plan =
+            labelledPlanMatch.Groups["plan"]
+                .Value
+                .Trim();
+
+        if (!string.IsNullOrWhiteSpace(plan))
+        {
+            return plan;
+        }
+    }
+
+    // =========================================================
+    // 3. Twitch plan from renewal
+    //
+    // Real example:
+    // "your subscription to
+    //  Tier 1 - 1 Month Subscription - GR
+    //  will invoice automatically"
+    // =========================================================
+
+    var tierPlanMatch =
+        Regex.Match(
+            text,
+            @"\bsubscription\s+to\s+(?<plan>Tier\s+\d+\s*-\s*\d+\s+Months?\s+Subscription\s*-\s*[A-Za-z]{2})",
+            RegexOptions.IgnoreCase);
+
+    if (tierPlanMatch.Success)
+    {
+        var plan =
+            tierPlanMatch.Groups["plan"]
+                .Value
+                .Trim();
+
+        if (!string.IsNullOrWhiteSpace(plan))
+        {
+            return plan;
+        }
+    }
+
+    return null;
+}
+
+    // =========================================================
+    // Plan validation
+    // =========================================================
+
+    private static bool IsValidPlanName(
+        string plan)
+    {
+        if (string.IsNullOrWhiteSpace(plan))
+        {
+            return false;
+        }
+
+        if (plan.Length < 2 ||
+            plan.Length > 50)
+        {
+            return false;
+        }
+
+        var invalidValues =
+            new[]
+            {
+                "your",
+                "the",
+                "this",
+                "subscription",
+                "membership",
+                "monthly",
+                "yearly",
+                "annual",
+                "premium",
+                "account",
+                "service"
+            };
+
+        return !invalidValues.Any(
+            value =>
+                plan.Equals(
+                    value,
+                    StringComparison.OrdinalIgnoreCase));
     }
 }
