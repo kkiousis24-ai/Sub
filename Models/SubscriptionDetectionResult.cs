@@ -10,6 +10,8 @@ public class SubscriptionDetectionResult
 
     public string? Merchant { get; set; }
 
+    public string? SubscriptionName { get; set; }
+
     public string? PlanName { get; set; }
 
     // Activation / Renewal / Cancellation / Trial / Unknown

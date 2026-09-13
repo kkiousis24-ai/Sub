@@ -10,6 +10,12 @@ public class Subscription
 
     public string Merchant { get; set; } = string.Empty;
 
+    // Example:
+    // Twitch -> lagmasterpiece
+    public string? SubscriptionName { get; set; }
+
+    // Example:
+    // Twitch -> Tier 1 - 1 Month Subscription - GR
     public string? PlanName { get; set; }
 
     public decimal Amount { get; set; }

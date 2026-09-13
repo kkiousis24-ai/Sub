@@ -121,20 +121,6 @@ public class SubscriptionsController : ControllerBase
 
     // =========================================================
     // POST: api/subscriptions/scan
-    //
-    // Gmail
-    // ↓
-    // Detection Engine
-    // ↓
-    // Email Deduplication
-    // ↓
-    // Safe Subscription Grouping
-    // ↓
-    // Status Handling
-    // ↓
-    // Evidence
-    // ↓
-    // SQLite
     // =========================================================
 
     [HttpPost("scan")]
@@ -168,12 +154,6 @@ public class SubscriptionsController : ControllerBase
 
             // =================================================
             // 2. Parse + sort oldest -> newest
-            //
-            // This is important because:
-            //
-            // Cancellation -> Activation -> Renewal
-            //
-            // should be processed chronologically.
             // =================================================
 
             var candidates =
@@ -263,6 +243,12 @@ public class SubscriptionsController : ControllerBase
                         ? "Unknown"
                         : detection.Merchant.Trim();
 
+                var detectedSubscriptionName =
+                    string.IsNullOrWhiteSpace(
+                        detection.SubscriptionName)
+                        ? null
+                        : detection.SubscriptionName.Trim();
+
                 var detectedPlanName =
                     string.IsNullOrWhiteSpace(
                         detection.PlanName)
@@ -285,9 +271,6 @@ public class SubscriptionsController : ControllerBase
 
                 // =============================================
                 // Status
-                //
-                // EventType has priority because it represents
-                // the meaning of this specific email.
                 // =============================================
 
                 var detectedStatus =
@@ -322,8 +305,7 @@ public class SubscriptionsController : ControllerBase
                 var confidenceScore =
                     Math.Min(
                         detection.Score / 10.0,
-                        1.0
-                    );
+                        1.0);
 
                 // =============================================
                 // Find existing subscription safely
@@ -334,6 +316,7 @@ public class SubscriptionsController : ControllerBase
                         account.UserId,
                         account.Id,
                         merchant,
+                        detectedSubscriptionName,
                         detectedPlanName,
                         detection.EventType);
 
@@ -354,6 +337,9 @@ public class SubscriptionsController : ControllerBase
 
                             Merchant =
                                 merchant,
+
+                            SubscriptionName =
+                                detectedSubscriptionName,
 
                             PlanName =
                                 detectedPlanName,
@@ -391,8 +377,8 @@ public class SubscriptionsController : ControllerBase
                     _context.Subscriptions.Add(
                         subscription);
 
-                    // Χρειαζόμαστε το ID
-                    // πριν δημιουργήσουμε evidence.
+                    // Need the subscription ID
+                    // before creating evidence.
                     await _context.SaveChangesAsync();
 
                     newSubscriptions++;
@@ -481,13 +467,25 @@ public class SubscriptionsController : ControllerBase
                     }
 
                     // =========================================
+                    // Subscription Name
+                    //
+                    // Only fill it when currently unknown.
+                    // =========================================
+
+                    if (
+                        string.IsNullOrWhiteSpace(
+                            subscription.SubscriptionName) &&
+                        !string.IsNullOrWhiteSpace(
+                            detectedSubscriptionName))
+                    {
+                        subscription.SubscriptionName =
+                            detectedSubscriptionName;
+                    }
+
+                    // =========================================
                     // Plan Name
                     //
-                    // We only fill an empty PlanName here.
-                    //
-                    // We never replace a specific Twitch
-                    // channel such as "lagmasterpiece"
-                    // with a generic "Tier 1..." value.
+                    // Only fill it when currently unknown.
                     // =========================================
 
                     if (
@@ -592,7 +590,7 @@ public class SubscriptionsController : ControllerBase
                 newEvidenceRecords++;
 
                 // =============================================
-                // Response object
+                // Response
                 // =============================================
 
                 detectedSubscriptions.Add(
@@ -612,6 +610,9 @@ public class SubscriptionsController : ControllerBase
 
                         Merchant =
                             detection.Merchant,
+
+                        SubscriptionName =
+                            detection.SubscriptionName,
 
                         PlanName =
                             detection.PlanName,
@@ -722,6 +723,7 @@ public class SubscriptionsController : ControllerBase
             int userId,
             int connectedEmailAccountId,
             string merchant,
+            string? detectedSubscriptionName,
             string? detectedPlanName,
             string eventType)
     {
@@ -750,16 +752,6 @@ public class SubscriptionsController : ControllerBase
 
         // =====================================================
         // TWITCH
-        //
-        // Twitch is special because:
-        //
-        // "lagmasterpiece"
-        //      = real channel identity
-        //
-        // "Tier 1 - 1 Month Subscription - GR"
-        //      = generic product/plan
-        //
-        // The Tier text does NOT identify the channel.
         // =====================================================
 
         if (merchant.Equals(
@@ -767,44 +759,65 @@ public class SubscriptionsController : ControllerBase
             StringComparison.OrdinalIgnoreCase))
         {
             // -------------------------------------------------
-            // Specific Twitch channel
+            // A specific channel / subscription identity
+            //
+            // Example:
+            // lagmasterpiece
+            //
+            // This is the safest identifier.
             // -------------------------------------------------
 
-            if (
-                !string.IsNullOrWhiteSpace(
-                    detectedPlanName) &&
-                !IsGenericTwitchPlanName(
-                    detectedPlanName))
+            if (!string.IsNullOrWhiteSpace(
+                detectedSubscriptionName))
             {
-                return merchantSubscriptions
-                    .FirstOrDefault(s =>
-                        PlanNamesEqual(
-                            s.PlanName,
-                            detectedPlanName));
+                var nameMatches =
+                    merchantSubscriptions
+                        .Where(s =>
+                            SubscriptionNamesEqual(
+                                s.SubscriptionName,
+                                detectedSubscriptionName))
+                        .ToList();
+
+                if (nameMatches.Count == 1)
+                {
+                    return nameMatches[0];
+                }
+
+                // No match or ambiguous match:
+                // do not guess.
+                return null;
             }
 
             // -------------------------------------------------
-            // Generic Twitch Tier plan
+            // No channel identity.
+            //
+            // We only have a generic Twitch plan such as:
+            //
+            // Tier 1 - 1 Month Subscription - GR
+            //
+            // Only compare against subscriptions that ALSO have
+            // no known SubscriptionName.
             // -------------------------------------------------
 
-            if (
-                !string.IsNullOrWhiteSpace(
-                    detectedPlanName) &&
-                IsGenericTwitchPlanName(
-                    detectedPlanName))
+            if (!string.IsNullOrWhiteSpace(
+                detectedPlanName))
             {
-                var genericMatches =
+                var planOnlyMatches =
                     merchantSubscriptions
                         .Where(s =>
+                            string.IsNullOrWhiteSpace(
+                                s.SubscriptionName) &&
+
                             PlanNamesEqual(
                                 s.PlanName,
                                 detectedPlanName))
                         .ToList();
 
-                // Activation represents a new purchase.
+                // An activation with only a generic Twitch plan
+                // may represent a new channel subscription.
                 //
                 // Do not automatically merge it with an older
-                // channel simply because the merchant is Twitch.
+                // generic subscription.
                 if (eventType.Equals(
                     "Activation",
                     StringComparison.OrdinalIgnoreCase))
@@ -812,23 +825,17 @@ public class SubscriptionsController : ControllerBase
                     return null;
                 }
 
-                // Renewal / Cancellation can update an existing
-                // generic subscription only when there is
-                // exactly one possible generic match.
-                if (genericMatches.Count == 1)
+                // Renewal can update the subscription only when
+                // there is exactly one safe candidate.
+                if (planOnlyMatches.Count == 1)
                 {
-                    return genericMatches[0];
+                    return planOnlyMatches[0];
                 }
 
-                // Multiple generic matches means ambiguity.
-                // Do not guess.
                 return null;
             }
 
-            // -------------------------------------------------
-            // Twitch email without any usable PlanName
-            // -------------------------------------------------
-
+            // No usable Twitch identity.
             return null;
         }
 
@@ -837,23 +844,51 @@ public class SubscriptionsController : ControllerBase
         // =====================================================
 
         if (!string.IsNullOrWhiteSpace(
-            detectedPlanName))
+            detectedSubscriptionName))
         {
-            var exactPlanMatch =
+            var nameMatches =
                 merchantSubscriptions
-                    .FirstOrDefault(s =>
-                        PlanNamesEqual(
-                            s.PlanName,
-                            detectedPlanName));
+                    .Where(s =>
+                        SubscriptionNamesEqual(
+                            s.SubscriptionName,
+                            detectedSubscriptionName))
+                    .ToList();
 
-            if (exactPlanMatch != null)
+            if (nameMatches.Count == 1)
             {
-                return exactPlanMatch;
+                return nameMatches[0];
+            }
+
+            if (nameMatches.Count > 1)
+            {
+                return null;
             }
         }
 
-        // For other merchants, merchant-only matching is used
-        // only when there is exactly one possible subscription.
+        if (!string.IsNullOrWhiteSpace(
+            detectedPlanName))
+        {
+            var planMatches =
+                merchantSubscriptions
+                    .Where(s =>
+                        PlanNamesEqual(
+                            s.PlanName,
+                            detectedPlanName))
+                    .ToList();
+
+            if (planMatches.Count == 1)
+            {
+                return planMatches[0];
+            }
+
+            if (planMatches.Count > 1)
+            {
+                return null;
+            }
+        }
+
+        // Merchant-only fallback is safe only when there is
+        // exactly one possible subscription.
         if (merchantSubscriptions.Count == 1)
         {
             return merchantSubscriptions[0];
@@ -863,37 +898,32 @@ public class SubscriptionsController : ControllerBase
     }
 
     // =========================================================
-    // Twitch generic plan detector
+    // Subscription Name comparison
     // =========================================================
 
-    private static bool
-        IsGenericTwitchPlanName(
-            string? planName)
+    private static bool SubscriptionNamesEqual(
+        string? first,
+        string? second)
     {
-        if (string.IsNullOrWhiteSpace(
-            planName))
+        if (
+            string.IsNullOrWhiteSpace(first) ||
+            string.IsNullOrWhiteSpace(second))
         {
             return false;
         }
 
-        return
-            planName.StartsWith(
-                "Tier ",
-                StringComparison.OrdinalIgnoreCase) &&
-
-            planName.Contains(
-                "Subscription",
-                StringComparison.OrdinalIgnoreCase);
+        return first.Trim().Equals(
+            second.Trim(),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     // =========================================================
     // Plan comparison
     // =========================================================
 
-    private static bool
-        PlanNamesEqual(
-            string? first,
-            string? second)
+    private static bool PlanNamesEqual(
+        string? first,
+        string? second)
     {
         if (
             string.IsNullOrWhiteSpace(first) ||
@@ -940,6 +970,9 @@ public class SubscriptionsController : ControllerBase
 
         subscription.Merchant =
             updatedSubscription.Merchant;
+
+        subscription.SubscriptionName =
+            updatedSubscription.SubscriptionName;
 
         subscription.PlanName =
             updatedSubscription.PlanName;

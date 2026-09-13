@@ -230,16 +230,13 @@ public class GmailController : ControllerBase
                             message.Snippet ??
                             string.Empty,
 
-                        // =====================================
-                        // FULL EMAIL BODY
-                        // =====================================
-
                         BodyText =
                             message.BodyText ??
                             string.Empty,
 
                         Date =
-                            ParseGmailDate(message.Date)
+                            ParseGmailDate(
+                                message.Date)
                     };
 
                 var detection =
@@ -267,6 +264,9 @@ public class GmailController : ControllerBase
 
                         Merchant =
                             detection.Merchant,
+
+                        SubscriptionName =
+                            detection.SubscriptionName,
 
                         PlanName =
                             detection.PlanName,
