@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>52830690-e4e4-49a6-b689-c40470917818</UserSecretsId>
+
+    <DefaultItemExcludes>
+      $(DefaultItemExcludes);Sub.Api.Tests\**
+    </DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

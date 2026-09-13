@@ -12,6 +12,8 @@ public class DetectedSubscriptionResponse
 
     public string? Merchant { get; set; }
 
+    public string? SubscriptionName { get; set; }
+
     public string? PlanName { get; set; }
 
     public string EventType { get; set; } = "Unknown";

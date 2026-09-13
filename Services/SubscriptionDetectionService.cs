@@ -249,10 +249,8 @@ public class SubscriptionDetectionService
         var from =
             email.From ?? string.Empty;
 
-        // =====================================================
         // Subject + snippet = PRIMARY evidence
         // Full body         = SECONDARY evidence
-        // =====================================================
 
         var primaryRawText =
             $"{subject} {snippet}";
@@ -844,7 +842,31 @@ public class SubscriptionDetectionService
             ExtractMerchant(from);
 
         // =====================================================
+        // Subscription Name
+        //
+        // Example:
+        // Twitch -> lagmasterpiece
+        // =====================================================
+
+        result.SubscriptionName =
+            ExtractSubscriptionName(
+                subject,
+                body,
+                result.Merchant);
+
+        if (!string.IsNullOrWhiteSpace(
+            result.SubscriptionName))
+        {
+            result.Reasons.Add(
+                $"Subscription detected: " +
+                $"{result.SubscriptionName}");
+        }
+
+        // =====================================================
         // Plan Name
+        //
+        // Example:
+        // Twitch -> Tier 1 - 1 Month Subscription - GR
         // =====================================================
 
         result.PlanName =
@@ -987,8 +1009,8 @@ public class SubscriptionDetectionService
             return "Monthly";
         }
 
-        // Twitch example:
-        // "Tier 1 - 1 Month Subscription - GR"
+        // Twitch:
+        // Tier 1 - 1 Month Subscription - GR
         if (Regex.IsMatch(
             text,
             @"\b1\s+month\s+subscription\b",
@@ -1069,7 +1091,6 @@ public class SubscriptionDetectionService
                 "MMMM d, yyyy",
                 "MMMM dd, yyyy",
 
-                // Example: 6 Feb 2026
                 "d MMM yyyy",
                 "dd MMM yyyy",
                 "d MMMM yyyy",
@@ -1314,7 +1335,128 @@ public class SubscriptionDetectionService
     }
 
     // =========================================================
+    // Subscription Name extraction
+    //
+    // This identifies WHICH subscription this is.
+    //
+    // Twitch example:
+    // lagmasterpiece
+    // =========================================================
+
+    private static string? ExtractSubscriptionName(
+        string subject,
+        string body,
+        string? merchant)
+    {
+        if (string.IsNullOrWhiteSpace(merchant))
+        {
+            return null;
+        }
+
+        if (!merchant.Contains(
+                "twitch",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var subjectName =
+            ExtractTwitchSubscriptionNameFromText(
+                subject);
+
+        if (!string.IsNullOrWhiteSpace(
+            subjectName))
+        {
+            return subjectName;
+        }
+
+        var bodyName =
+            ExtractTwitchSubscriptionNameFromText(
+                body);
+
+        if (!string.IsNullOrWhiteSpace(
+            bodyName))
+        {
+            return bodyName;
+        }
+
+        return null;
+    }
+
+    // =========================================================
+    // Twitch Subscription Name / Channel extraction
+    // =========================================================
+
+    private static string?
+        ExtractTwitchSubscriptionNameFromText(
+            string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var channelPatterns =
+            new[]
+            {
+                // Your lagmasterpiece
+                // Subscription Cancellation Confirmation
+                @"\byour\s+(?<name>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\s+subscription\s+cancellation\s+confirmation\b",
+
+                // cancellation to lagmasterpiece
+                @"\bcancellation\s+to\s+(?<name>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\b",
+
+                // subscription to channel lagmasterpiece
+                @"\bsubscription\s+to\s+channel\s+[""']?(?<name>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
+
+                // subscribed to lagmasterpiece
+                @"\bsubscribed\s+to\s+[""']?(?<name>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
+
+                // subscription for channel lagmasterpiece
+                @"\bsubscription\s+for\s+channel\s+[""']?(?<name>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?"
+            };
+
+        foreach (var pattern in channelPatterns)
+        {
+            var match =
+                Regex.Match(
+                    text,
+                    pattern,
+                    RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var name =
+                match.Groups["name"]
+                    .Value
+                    .Trim()
+                    .Trim(
+                        '"',
+                        '\'',
+                        '.',
+                        ',',
+                        ':',
+                        ';');
+
+            if (IsValidSubscriptionName(name))
+            {
+                return name;
+            }
+        }
+
+        return null;
+    }
+
+    // =========================================================
     // Plan Name extraction
+    //
+    // This identifies WHAT PLAN is being paid for.
+    //
+    // Twitch example:
+    // Tier 1 - 1 Month Subscription - GR
     // =========================================================
 
     private static string? ExtractPlanName(
@@ -1335,17 +1477,21 @@ public class SubscriptionDetectionService
         }
 
         var subjectPlan =
-            ExtractTwitchPlanFromText(subject);
+            ExtractTwitchPlanFromText(
+                subject);
 
-        if (!string.IsNullOrWhiteSpace(subjectPlan))
+        if (!string.IsNullOrWhiteSpace(
+            subjectPlan))
         {
             return subjectPlan;
         }
 
         var bodyPlan =
-            ExtractTwitchPlanFromText(body);
+            ExtractTwitchPlanFromText(
+                body);
 
-        if (!string.IsNullOrWhiteSpace(bodyPlan))
+        if (!string.IsNullOrWhiteSpace(
+            bodyPlan))
         {
             return bodyPlan;
         }
@@ -1354,7 +1500,7 @@ public class SubscriptionDetectionService
     }
 
     // =========================================================
-    // Twitch Plan / Channel extraction
+    // Twitch Plan extraction
     // =========================================================
 
     private static string? ExtractTwitchPlanFromText(
@@ -1366,56 +1512,10 @@ public class SubscriptionDetectionService
         }
 
         // =====================================================
-        // 1. Twitch channel / streamer
-        // =====================================================
-
-        var channelPatterns =
-            new[]
-            {
-                @"\byour\s+(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\s+subscription\s+cancellation\s+confirmation\b",
-
-                @"\bcancellation\s+to\s+(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\b",
-
-                @"\bsubscription\s+to\s+channel\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
-
-                @"\bsubscribed\s+to\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
-
-                @"\bsubscription\s+for\s+channel\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?"
-            };
-
-        foreach (var pattern in channelPatterns)
-        {
-            var match =
-                Regex.Match(
-                    text,
-                    pattern,
-                    RegexOptions.IgnoreCase);
-
-            if (!match.Success)
-            {
-                continue;
-            }
-
-            var plan =
-                match.Groups["plan"]
-                    .Value
-                    .Trim()
-                    .Trim(
-                        '"',
-                        '\'',
-                        '.',
-                        ',',
-                        ':',
-                        ';');
-
-            if (IsValidPlanName(plan))
-            {
-                return plan;
-            }
-        }
-
-        // =====================================================
-        // 2. Twitch plan from invoice
+        // 1. Invoice format
+        //
+        // Your Plan:
+        // Tier 1 - 1 Month Subscription - GR
         // =====================================================
 
         var labelledPlanMatch =
@@ -1438,7 +1538,10 @@ public class SubscriptionDetectionService
         }
 
         // =====================================================
-        // 3. Twitch plan from renewal
+        // 2. Renewal format
+        //
+        // subscription to
+        // Tier 1 - 1 Month Subscription - GR
         // =====================================================
 
         var tierPlanMatch =
@@ -1464,23 +1567,25 @@ public class SubscriptionDetectionService
     }
 
     // =========================================================
-    // Plan validation
+    // Subscription Name validation
     // =========================================================
 
-    private static bool IsValidPlanName(
-        string plan)
+    private static bool IsValidSubscriptionName(
+        string name)
     {
-        if (string.IsNullOrWhiteSpace(plan))
+        if (string.IsNullOrWhiteSpace(name))
         {
             return false;
         }
 
-        if (plan.Length < 2 ||
-            plan.Length > 50)
+        if (name.Length < 2 ||
+            name.Length > 50)
         {
             return false;
         }
 
+        // Prevent generic wording from accidentally
+        // becoming a subscription identity.
         var invalidValues =
             new[]
             {
@@ -1494,12 +1599,16 @@ public class SubscriptionDetectionService
                 "annual",
                 "premium",
                 "account",
-                "service"
+                "service",
+
+                // Important for Twitch:
+                // prevents "Tier" from becoming the channel name.
+                "tier"
             };
 
         return !invalidValues.Any(
             value =>
-                plan.Equals(
+                name.Equals(
                     value,
                     StringComparison.OrdinalIgnoreCase));
     }
