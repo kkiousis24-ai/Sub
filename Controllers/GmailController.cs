@@ -268,6 +268,12 @@ public class GmailController : ControllerBase
                         Merchant =
                             detection.Merchant,
 
+                        PlanName =
+                            detection.PlanName,
+
+                        EventType =
+                            detection.EventType,
+
                         Amount =
                             detection.Amount,
 

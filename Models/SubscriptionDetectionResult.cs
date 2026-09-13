@@ -10,6 +10,11 @@ public class SubscriptionDetectionResult
 
     public string? Merchant { get; set; }
 
+    public string? PlanName { get; set; }
+
+    // Activation / Renewal / Cancellation / Trial / Unknown
+    public string EventType { get; set; } = "Unknown";
+
     public decimal? Amount { get; set; }
 
     public string? Currency { get; set; }
