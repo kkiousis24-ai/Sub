@@ -845,10 +845,6 @@ public class SubscriptionDetectionService
 
         // =====================================================
         // Plan Name
-        //
-        // For now we use conservative extraction.
-        // Twitch channel names can identify separate
-        // subscriptions from the same merchant.
         // =====================================================
 
         result.PlanName =
@@ -991,6 +987,16 @@ public class SubscriptionDetectionService
             return "Monthly";
         }
 
+        // Twitch example:
+        // "Tier 1 - 1 Month Subscription - GR"
+        if (Regex.IsMatch(
+            text,
+            @"\b1\s+month\s+subscription\b",
+            RegexOptions.IgnoreCase))
+        {
+            return "Monthly";
+        }
+
         if (YearlyPhrases.Any(
             phrase =>
                 text.Contains(
@@ -1027,6 +1033,21 @@ public class SubscriptionDetectionService
         var patterns =
             new[]
             {
+                // Next Invoice: Feb 15, 2025
+                @"next\s+invoice\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+                // automatically renew on Feb 15, 2025
+                @"automatically\s+renew\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+                // automatically renew on 6 Feb 2026
+                @"automatically\s+renew\s+on\s+(?<date>\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+
+                // will invoice automatically on Feb 15, 2025
+                @"will\s+invoice\s+automatically\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+                // will invoice automatically on 6 Feb 2026
+                @"will\s+invoice\s+automatically\s+on\s+(?<date>\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+
                 @"(?:the\s+)?next\s+(?:charge|payment|billing)\s+(?:will\s+be\s+)?(?:on\s+)?(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
 
                 @"(?:you\s+)?will\s+be\s+charged\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
@@ -1047,6 +1068,13 @@ public class SubscriptionDetectionService
                 "MMM dd, yyyy",
                 "MMMM d, yyyy",
                 "MMMM dd, yyyy",
+
+                // Example: 6 Feb 2026
+                "d MMM yyyy",
+                "dd MMM yyyy",
+                "d MMMM yyyy",
+                "dd MMMM yyyy",
+
                 "yyyy-MM-dd"
             };
 
@@ -1287,20 +1315,6 @@ public class SubscriptionDetectionService
 
     // =========================================================
     // Plan Name extraction
-    //
-    // We deliberately keep this conservative.
-    //
-    // For Twitch we expect phrases such as:
-    //
-    // "Your subscription to lagmasterpiece has been canceled"
-    // "Your subscription to lagmasterpiece will renew"
-    //
-    // That lets us distinguish:
-    //
-    // Twitch / streamer A
-    // Twitch / streamer B
-    //
-    // instead of merging every Twitch subscription together.
     // =========================================================
 
     private static string? ExtractPlanName(
@@ -1313,9 +1327,6 @@ public class SubscriptionDetectionService
             return null;
         }
 
-        // For now, use sentence-based extraction only for Twitch.
-        // This prevents phrases from unrelated companies
-        // accidentally becoming PlanName values.
         if (!merchant.Contains(
                 "twitch",
                 StringComparison.OrdinalIgnoreCase))
@@ -1346,122 +1357,111 @@ public class SubscriptionDetectionService
     // Twitch Plan / Channel extraction
     // =========================================================
 
-private static string? ExtractTwitchPlanFromText(
-    string text)
-{
-    if (string.IsNullOrWhiteSpace(text))
+    private static string? ExtractTwitchPlanFromText(
+        string text)
     {
-        return null;
-    }
-
-    // =========================================================
-    // 1. Twitch channel / streamer
-    //
-    // Real examples:
-    //
-    // "Your lagmasterpiece Subscription Cancellation Confirmation"
-    //
-    // "This email confirms your recent cancellation
-    //  to lagmasterpiece."
-    //
-    // Channel name has priority over the generic Tier plan.
-    // =========================================================
-
-    var channelPatterns =
-        new[]
+        if (string.IsNullOrWhiteSpace(text))
         {
-            @"\byour\s+(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\s+subscription\s+cancellation\s+confirmation\b",
+            return null;
+        }
 
-            @"\bcancellation\s+to\s+(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\b",
+        // =====================================================
+        // 1. Twitch channel / streamer
+        // =====================================================
 
-            @"\bsubscription\s+to\s+channel\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
+        var channelPatterns =
+            new[]
+            {
+                @"\byour\s+(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\s+subscription\s+cancellation\s+confirmation\b",
 
-            @"\bsubscribed\s+to\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
+                @"\bcancellation\s+to\s+(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})\b",
 
-            @"\bsubscription\s+for\s+channel\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?"
-        };
+                @"\bsubscription\s+to\s+channel\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
 
-    foreach (var pattern in channelPatterns)
-    {
-        var match =
+                @"\bsubscribed\s+to\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?",
+
+                @"\bsubscription\s+for\s+channel\s+[""']?(?<plan>[A-Za-z0-9_][A-Za-z0-9_.-]{1,49})[""']?"
+            };
+
+        foreach (var pattern in channelPatterns)
+        {
+            var match =
+                Regex.Match(
+                    text,
+                    pattern,
+                    RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var plan =
+                match.Groups["plan"]
+                    .Value
+                    .Trim()
+                    .Trim(
+                        '"',
+                        '\'',
+                        '.',
+                        ',',
+                        ':',
+                        ';');
+
+            if (IsValidPlanName(plan))
+            {
+                return plan;
+            }
+        }
+
+        // =====================================================
+        // 2. Twitch plan from invoice
+        // =====================================================
+
+        var labelledPlanMatch =
             Regex.Match(
                 text,
-                pattern,
+                @"\byour\s+plan\s*:\s*(?<plan>Tier\s+\d+\s*-\s*\d+\s+Months?\s+Subscription\s*-\s*[A-Za-z]{2})",
                 RegexOptions.IgnoreCase);
 
-        if (!match.Success)
+        if (labelledPlanMatch.Success)
         {
-            continue;
+            var plan =
+                labelledPlanMatch.Groups["plan"]
+                    .Value
+                    .Trim();
+
+            if (!string.IsNullOrWhiteSpace(plan))
+            {
+                return plan;
+            }
         }
 
-        var plan =
-            match.Groups["plan"]
-                .Value
-                .Trim()
-                .Trim('"', '\'', '.', ',', ':', ';');
+        // =====================================================
+        // 3. Twitch plan from renewal
+        // =====================================================
 
-        if (IsValidPlanName(plan))
+        var tierPlanMatch =
+            Regex.Match(
+                text,
+                @"\bsubscription\s+to\s+(?<plan>Tier\s+\d+\s*-\s*\d+\s+Months?\s+Subscription\s*-\s*[A-Za-z]{2})",
+                RegexOptions.IgnoreCase);
+
+        if (tierPlanMatch.Success)
         {
-            return plan;
+            var plan =
+                tierPlanMatch.Groups["plan"]
+                    .Value
+                    .Trim();
+
+            if (!string.IsNullOrWhiteSpace(plan))
+            {
+                return plan;
+            }
         }
+
+        return null;
     }
-
-    // =========================================================
-    // 2. Twitch plan from invoice
-    //
-    // Real example:
-    // "Your Plan: Tier 1 - 1 Month Subscription - GR"
-    // =========================================================
-
-    var labelledPlanMatch =
-        Regex.Match(
-            text,
-            @"\byour\s+plan\s*:\s*(?<plan>Tier\s+\d+\s*-\s*\d+\s+Months?\s+Subscription\s*-\s*[A-Za-z]{2})",
-            RegexOptions.IgnoreCase);
-
-    if (labelledPlanMatch.Success)
-    {
-        var plan =
-            labelledPlanMatch.Groups["plan"]
-                .Value
-                .Trim();
-
-        if (!string.IsNullOrWhiteSpace(plan))
-        {
-            return plan;
-        }
-    }
-
-    // =========================================================
-    // 3. Twitch plan from renewal
-    //
-    // Real example:
-    // "your subscription to
-    //  Tier 1 - 1 Month Subscription - GR
-    //  will invoice automatically"
-    // =========================================================
-
-    var tierPlanMatch =
-        Regex.Match(
-            text,
-            @"\bsubscription\s+to\s+(?<plan>Tier\s+\d+\s*-\s*\d+\s+Months?\s+Subscription\s*-\s*[A-Za-z]{2})",
-            RegexOptions.IgnoreCase);
-
-    if (tierPlanMatch.Success)
-    {
-        var plan =
-            tierPlanMatch.Groups["plan"]
-                .Value
-                .Trim();
-
-        if (!string.IsNullOrWhiteSpace(plan))
-        {
-            return plan;
-        }
-    }
-
-    return null;
-}
 
     // =========================================================
     // Plan validation
