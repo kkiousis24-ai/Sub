@@ -13,17 +13,21 @@ public class SubscriptionsController : ControllerBase
     private readonly AppDbContext _context;
     private readonly GoogleGmailService _gmailService;
     private readonly ISubscriptionDetectionService _detectionService;
-
+    private readonly ISubscriptionMatchingService _matchingService;
+    private readonly ISubscriptionLifecycleService _lifecycleService;
     public SubscriptionsController(
         AppDbContext context,
         GoogleGmailService gmailService,
-        ISubscriptionDetectionService detectionService)
+        ISubscriptionDetectionService detectionService,
+        ISubscriptionMatchingService matchingService,
+        ISubscriptionLifecycleService lifecycleService)
     {
         _context = context;
         _gmailService = gmailService;
         _detectionService = detectionService;
+        _matchingService = matchingService;
+        _lifecycleService = lifecycleService;
     }
-
     // =========================================================
     // GET: api/subscriptions
     // =========================================================
@@ -312,13 +316,14 @@ public class SubscriptionsController : ControllerBase
                 // =============================================
 
                 var subscription =
-                    await FindMatchingSubscriptionAsync(
-                        account.UserId,
-                        account.Id,
-                        merchant,
-                        detectedSubscriptionName,
-                        detectedPlanName,
-                        detection.EventType);
+                    await _matchingService
+                        .FindMatchingSubscriptionAsync(
+                            account.UserId,
+                            account.Id,
+                            merchant,
+                            detectedSubscriptionName,
+                            detectedPlanName,
+                            detection.EventType);
 
                 // =============================================
                 // CREATE
@@ -377,8 +382,6 @@ public class SubscriptionsController : ControllerBase
                     _context.Subscriptions.Add(
                         subscription);
 
-                    // Need the subscription ID
-                    // before creating evidence.
                     await _context.SaveChangesAsync();
 
                     newSubscriptions++;
@@ -414,10 +417,10 @@ public class SubscriptionsController : ControllerBase
                     var currentEmailDate =
                         candidate.Date;
 
-                    // -----------------------------------------
+                    // -------------------------------------------------
                     // Do not allow an older email to overwrite
                     // the latest known status.
-                    // -----------------------------------------
+                    // -------------------------------------------------
 
                     var canUpdateStatus =
                         latestKnownDate == null ||
@@ -425,125 +428,15 @@ public class SubscriptionsController : ControllerBase
                         currentEmailDate >=
                         latestKnownDate;
 
-                    if (canUpdateStatus)
+                    var wasCanceledNow =
+                        _lifecycleService.ApplyDetection(
+                            subscription,
+                            detection,
+                            canUpdateStatus);
+
+                    if (wasCanceledNow)
                     {
-                        var oldStatus =
-                            subscription.Status;
-
-                        subscription.Status =
-                            detectedStatus;
-
-                        if (
-                            detectedStatus ==
-                            "Canceled" &&
-                            oldStatus !=
-                            "Canceled")
-                        {
-                            canceledSubscriptions++;
-                        }
-
-                        // =====================================
-                        // Next Billing Date
-                        // =====================================
-
-                        if (detectedStatus ==
-                            "Canceled")
-                        {
-                            subscription
-                                .NextBillingDate =
-                                null;
-                        }
-                        else if (
-                            detection
-                                .NextBillingDate
-                                .HasValue)
-                        {
-                            subscription
-                                .NextBillingDate =
-                                detection
-                                    .NextBillingDate
-                                    .Value;
-                        }
-                    }
-
-                    // =========================================
-                    // Subscription Name
-                    //
-                    // Only fill it when currently unknown.
-                    // =========================================
-
-                    if (
-                        string.IsNullOrWhiteSpace(
-                            subscription.SubscriptionName) &&
-                        !string.IsNullOrWhiteSpace(
-                            detectedSubscriptionName))
-                    {
-                        subscription.SubscriptionName =
-                            detectedSubscriptionName;
-                    }
-
-                    // =========================================
-                    // Plan Name
-                    //
-                    // Only fill it when currently unknown.
-                    // =========================================
-
-                    if (
-                        string.IsNullOrWhiteSpace(
-                            subscription.PlanName) &&
-                        !string.IsNullOrWhiteSpace(
-                            detectedPlanName))
-                    {
-                        subscription.PlanName =
-                            detectedPlanName;
-                    }
-
-                    // =========================================
-                    // Amount
-                    // =========================================
-
-                    if (
-                        detection.Amount.HasValue &&
-                        detection.Amount.Value > 0)
-                    {
-                        subscription.Amount =
-                            detection.Amount.Value;
-                    }
-
-                    // =========================================
-                    // Currency
-                    // =========================================
-
-                    if (
-                        !string.IsNullOrWhiteSpace(
-                            detection.Currency))
-                    {
-                        subscription.Currency =
-                            currency;
-                    }
-
-                    // =========================================
-                    // Billing Cycle
-                    // =========================================
-
-                    if (billingCycle !=
-                        "Unknown")
-                    {
-                        subscription.BillingCycle =
-                            billingCycle;
-                    }
-
-                    // =========================================
-                    // Confidence
-                    // =========================================
-
-                    if (
-                        confidenceScore >
-                        subscription.ConfidenceScore)
-                    {
-                        subscription
-                            .ConfidenceScore =
-                            confidenceScore;
+                        canceledSubscriptions++;
                     }
 
                     updatedSubscriptions++;
@@ -712,229 +605,6 @@ public class SubscriptionsController : ControllerBase
                         ex.Message
                 });
         }
-    }
-
-    // =========================================================
-    // SAFE SUBSCRIPTION MATCHING
-    // =========================================================
-
-    private async Task<Subscription?>
-        FindMatchingSubscriptionAsync(
-            int userId,
-            int connectedEmailAccountId,
-            string merchant,
-            string? detectedSubscriptionName,
-            string? detectedPlanName,
-            string eventType)
-    {
-        var normalizedMerchant =
-            merchant
-                .Trim()
-                .ToLowerInvariant();
-
-        var merchantSubscriptions =
-            await _context.Subscriptions
-                .Where(s =>
-                    s.UserId ==
-                    userId &&
-
-                    s.ConnectedEmailAccountId ==
-                    connectedEmailAccountId &&
-
-                    s.Merchant.ToLower() ==
-                    normalizedMerchant)
-                .ToListAsync();
-
-        if (merchantSubscriptions.Count == 0)
-        {
-            return null;
-        }
-
-        // =====================================================
-        // TWITCH
-        // =====================================================
-
-        if (merchant.Equals(
-            "Twitch",
-            StringComparison.OrdinalIgnoreCase))
-        {
-            // -------------------------------------------------
-            // A specific channel / subscription identity
-            //
-            // Example:
-            // lagmasterpiece
-            //
-            // This is the safest identifier.
-            // -------------------------------------------------
-
-            if (!string.IsNullOrWhiteSpace(
-                detectedSubscriptionName))
-            {
-                var nameMatches =
-                    merchantSubscriptions
-                        .Where(s =>
-                            SubscriptionNamesEqual(
-                                s.SubscriptionName,
-                                detectedSubscriptionName))
-                        .ToList();
-
-                if (nameMatches.Count == 1)
-                {
-                    return nameMatches[0];
-                }
-
-                // No match or ambiguous match:
-                // do not guess.
-                return null;
-            }
-
-            // -------------------------------------------------
-            // No channel identity.
-            //
-            // We only have a generic Twitch plan such as:
-            //
-            // Tier 1 - 1 Month Subscription - GR
-            //
-            // Only compare against subscriptions that ALSO have
-            // no known SubscriptionName.
-            // -------------------------------------------------
-
-            if (!string.IsNullOrWhiteSpace(
-                detectedPlanName))
-            {
-                var planOnlyMatches =
-                    merchantSubscriptions
-                        .Where(s =>
-                            string.IsNullOrWhiteSpace(
-                                s.SubscriptionName) &&
-
-                            PlanNamesEqual(
-                                s.PlanName,
-                                detectedPlanName))
-                        .ToList();
-
-                // An activation with only a generic Twitch plan
-                // may represent a new channel subscription.
-                //
-                // Do not automatically merge it with an older
-                // generic subscription.
-                if (eventType.Equals(
-                    "Activation",
-                    StringComparison.OrdinalIgnoreCase))
-                {
-                    return null;
-                }
-
-                // Renewal can update the subscription only when
-                // there is exactly one safe candidate.
-                if (planOnlyMatches.Count == 1)
-                {
-                    return planOnlyMatches[0];
-                }
-
-                return null;
-            }
-
-            // No usable Twitch identity.
-            return null;
-        }
-
-        // =====================================================
-        // OTHER MERCHANTS
-        // =====================================================
-
-        if (!string.IsNullOrWhiteSpace(
-            detectedSubscriptionName))
-        {
-            var nameMatches =
-                merchantSubscriptions
-                    .Where(s =>
-                        SubscriptionNamesEqual(
-                            s.SubscriptionName,
-                            detectedSubscriptionName))
-                    .ToList();
-
-            if (nameMatches.Count == 1)
-            {
-                return nameMatches[0];
-            }
-
-            if (nameMatches.Count > 1)
-            {
-                return null;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(
-            detectedPlanName))
-        {
-            var planMatches =
-                merchantSubscriptions
-                    .Where(s =>
-                        PlanNamesEqual(
-                            s.PlanName,
-                            detectedPlanName))
-                    .ToList();
-
-            if (planMatches.Count == 1)
-            {
-                return planMatches[0];
-            }
-
-            if (planMatches.Count > 1)
-            {
-                return null;
-            }
-        }
-
-        // Merchant-only fallback is safe only when there is
-        // exactly one possible subscription.
-        if (merchantSubscriptions.Count == 1)
-        {
-            return merchantSubscriptions[0];
-        }
-
-        return null;
-    }
-
-    // =========================================================
-    // Subscription Name comparison
-    // =========================================================
-
-    private static bool SubscriptionNamesEqual(
-        string? first,
-        string? second)
-    {
-        if (
-            string.IsNullOrWhiteSpace(first) ||
-            string.IsNullOrWhiteSpace(second))
-        {
-            return false;
-        }
-
-        return first.Trim().Equals(
-            second.Trim(),
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    // =========================================================
-    // Plan comparison
-    // =========================================================
-
-    private static bool PlanNamesEqual(
-        string? first,
-        string? second)
-    {
-        if (
-            string.IsNullOrWhiteSpace(first) ||
-            string.IsNullOrWhiteSpace(second))
-        {
-            return false;
-        }
-
-        return first.Trim().Equals(
-            second.Trim(),
-            StringComparison.OrdinalIgnoreCase);
     }
 
     // =========================================================
