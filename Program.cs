@@ -115,9 +115,25 @@ builder.Services.AddScoped<GoogleGmailService>();
 // Subscription Detection Engine
 // ======================================================
 
+// ======================================================
+// Subscription Detection Engine
+// ======================================================
+
 builder.Services.AddScoped<
     ISubscriptionDetectionService,
     SubscriptionDetectionService>();
+
+// ======================================================
+// Subscription Matching Engine
+// ======================================================
+
+builder.Services.AddScoped<
+    ISubscriptionMatchingService,
+    SubscriptionMatchingService>();
+
+builder.Services.AddScoped<
+    ISubscriptionLifecycleService,
+    SubscriptionLifecycleService>();
 
 // ======================================================
 // Build App

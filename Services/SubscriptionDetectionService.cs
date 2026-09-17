@@ -1044,94 +1044,100 @@ public class SubscriptionDetectionService
     // Next billing date
     // =========================================================
 
-    private static DateTime? ExtractNextBillingDate(
-        string text)
+private static DateTime? ExtractNextBillingDate(
+    string text)
+{
+    if (string.IsNullOrWhiteSpace(text))
     {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return null;
-        }
-
-        var patterns =
-            new[]
-            {
-                // Next Invoice: Feb 15, 2025
-                @"next\s+invoice\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-
-                // automatically renew on Feb 15, 2025
-                @"automatically\s+renew\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-
-                // automatically renew on 6 Feb 2026
-                @"automatically\s+renew\s+on\s+(?<date>\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
-
-                // will invoice automatically on Feb 15, 2025
-                @"will\s+invoice\s+automatically\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-
-                // will invoice automatically on 6 Feb 2026
-                @"will\s+invoice\s+automatically\s+on\s+(?<date>\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
-
-                @"(?:the\s+)?next\s+(?:charge|payment|billing)\s+(?:will\s+be\s+)?(?:on\s+)?(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-
-                @"(?:you\s+)?will\s+be\s+charged\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-
-                @"renews\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-
-                @"renewal\s+date\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-
-                @"next\s+billing\s+date\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
-
-                @"(?:the\s+)?next\s+(?:charge|payment|billing)\s+(?:will\s+be\s+)?(?:on\s+)?(?<date>\d{4}-\d{2}-\d{2})"
-            };
-
-        var formats =
-            new[]
-            {
-                "MMM d, yyyy",
-                "MMM dd, yyyy",
-                "MMMM d, yyyy",
-                "MMMM dd, yyyy",
-
-                "d MMM yyyy",
-                "dd MMM yyyy",
-                "d MMMM yyyy",
-                "dd MMMM yyyy",
-
-                "yyyy-MM-dd"
-            };
-
-        foreach (var pattern in patterns)
-        {
-            var match =
-                Regex.Match(
-                    text,
-                    pattern,
-                    RegexOptions.IgnoreCase);
-
-            if (!match.Success)
-            {
-                continue;
-            }
-
-            var dateText =
-                match.Groups["date"]
-                    .Value
-                    .Trim();
-
-            if (DateTime.TryParseExact(
-                dateText,
-                formats,
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.None,
-                out var parsedDate))
-            {
-                return DateTime.SpecifyKind(
-                    parsedDate.Date,
-                    DateTimeKind.Utc);
-            }
-        }
-
         return null;
     }
+
+    var patterns =
+        new[]
+        {
+            // Next Invoice: Feb 15, 2025
+            @"next\s+invoice\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            // automatically renew on Feb 15, 2025
+            @"automatically\s+renew\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            // automatically renew on 6 Feb 2026
+            @"automatically\s+renew\s+on\s+(?<date>\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+
+            // will renew on Sep 30, 2026
+            @"will\s+renew\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            // will renew on 30 Sep 2026
+            @"will\s+renew\s+on\s+(?<date>\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+
+            // will invoice automatically on Feb 15, 2025
+            @"will\s+invoice\s+automatically\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            // will invoice automatically on 6 Feb 2026
+            @"will\s+invoice\s+automatically\s+on\s+(?<date>\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})",
+
+            @"(?:the\s+)?next\s+(?:charge|payment|billing)\s+(?:will\s+be\s+)?(?:on\s+)?(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            @"(?:you\s+)?will\s+be\s+charged\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            @"renews\s+on\s+(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            @"renewal\s+date\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            @"next\s+billing\s+date\s*(?:is|:)?\s*(?<date>[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})",
+
+            @"(?:the\s+)?next\s+(?:charge|payment|billing)\s+(?:will\s+be\s+)?(?:on\s+)?(?<date>\d{4}-\d{2}-\d{2})"
+        };
+
+    var formats =
+        new[]
+        {
+            "MMM d, yyyy",
+            "MMM dd, yyyy",
+            "MMMM d, yyyy",
+            "MMMM dd, yyyy",
+
+            "d MMM yyyy",
+            "dd MMM yyyy",
+            "d MMMM yyyy",
+            "dd MMMM yyyy",
+
+            "yyyy-MM-dd"
+        };
+
+    foreach (var pattern in patterns)
+    {
+        var match =
+            Regex.Match(
+                text,
+                pattern,
+                RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+        {
+            continue;
+        }
+
+        var dateText =
+            match.Groups["date"]
+                .Value
+                .Trim();
+
+        if (DateTime.TryParseExact(
+            dateText,
+            formats,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var parsedDate))
+        {
+            return DateTime.SpecifyKind(
+                parsedDate.Date,
+                DateTimeKind.Utc);
+        }
+    }
+
+    return null;
+}
 
     // =========================================================
     // Amount extraction
