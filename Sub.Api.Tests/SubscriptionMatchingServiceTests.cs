@@ -404,6 +404,41 @@ public class SubscriptionMatchingServiceTests
             activationMatch.Id,
             cancellationMatch.Id);
     }
+    [Fact]
+    public async Task GenericMerchant_WithDifferentPlan_DoesNotFallbackToMerchantOnly()
+    {
+        await using var context =
+            CreateContext();
+
+        var existing =
+            new Subscription
+            {
+                UserId = 1,
+                ConnectedEmailAccountId = 1,
+                Merchant = "Spotify",
+                PlanName = "Individual",
+                Status = "Active"
+            };
+
+        context.Subscriptions.Add(existing);
+
+        await context.SaveChangesAsync();
+
+        var service =
+            new SubscriptionMatchingService(context);
+
+        var result =
+            await service.FindMatchingSubscriptionAsync(
+                1,
+                1,
+                "Spotify",
+                null,
+                "Family",
+                "Activation");
+
+        Assert.Null(result);
+    }
+
     private static AppDbContext CreateContext()
     {
         var options =

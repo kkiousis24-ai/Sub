@@ -136,10 +136,7 @@ public class SubscriptionMatchingService
                 return nameMatches[0];
             }
 
-            if (nameMatches.Count > 1)
-            {
-                return null;
-            }
+            return null;
         }
 
         if (!string.IsNullOrWhiteSpace(
@@ -158,10 +155,7 @@ public class SubscriptionMatchingService
                 return planMatches[0];
             }
 
-            if (planMatches.Count > 1)
-            {
-                return null;
-            }
+            return null;
         }
 
         // Merchant-only fallback
