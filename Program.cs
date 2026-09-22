@@ -134,6 +134,9 @@ builder.Services.AddScoped<
 builder.Services.AddScoped<
     ISubscriptionLifecycleService,
     SubscriptionLifecycleService>();
+builder.Services.AddScoped<
+    ISubscriptionEvidenceService,
+    SubscriptionEvidenceService>();
 
 // ======================================================
 // Build App
