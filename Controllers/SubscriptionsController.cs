@@ -15,18 +15,21 @@ public class SubscriptionsController : ControllerBase
     private readonly ISubscriptionDetectionService _detectionService;
     private readonly ISubscriptionMatchingService _matchingService;
     private readonly ISubscriptionLifecycleService _lifecycleService;
+    private readonly ISubscriptionEvidenceService _evidenceService;
     public SubscriptionsController(
         AppDbContext context,
         GoogleGmailService gmailService,
         ISubscriptionDetectionService detectionService,
         ISubscriptionMatchingService matchingService,
-        ISubscriptionLifecycleService lifecycleService)
+        ISubscriptionLifecycleService lifecycleService,
+        ISubscriptionEvidenceService evidenceService)
     {
         _context = context;
         _gmailService = gmailService;
         _detectionService = detectionService;
         _matchingService = matchingService;
         _lifecycleService = lifecycleService;
+        _evidenceService = evidenceService;
     }
     // =========================================================
     // GET: api/subscriptions
@@ -217,10 +220,10 @@ public class SubscriptionsController : ControllerBase
                 // =============================================
 
                 var evidenceAlreadyExists =
-                    await _context.SubscriptionEvidences
-                        .AnyAsync(e =>
-                            e.MessageId ==
-                            candidate.GmailMessageId);
+                await _evidenceService
+                .EvidenceExistsAsync(
+                    account.Id,
+                    candidate.GmailMessageId);
 
                 if (evidenceAlreadyExists)
                 {
@@ -228,7 +231,6 @@ public class SubscriptionsController : ControllerBase
 
                     continue;
                 }
-
                 // =============================================
                 // Detection
                 // =============================================
