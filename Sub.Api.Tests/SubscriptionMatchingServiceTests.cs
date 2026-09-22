@@ -438,6 +438,40 @@ public class SubscriptionMatchingServiceTests
 
         Assert.Null(result);
     }
+    [Fact]
+    public async Task GenericMerchant_WithDifferentSubscriptionName_DoesNotFallbackToMerchantOnly()
+    {
+        await using var context =
+            CreateContext();
+
+        var existing =
+            new Subscription
+            {
+                UserId = 1,
+                ConnectedEmailAccountId = 1,
+                Merchant = "Patreon",
+                SubscriptionName = "Creator A",
+                Status = "Active"
+            };
+
+        context.Subscriptions.Add(existing);
+
+        await context.SaveChangesAsync();
+
+        var service =
+            new SubscriptionMatchingService(context);
+
+        var result =
+            await service.FindMatchingSubscriptionAsync(
+                1,
+                1,
+                "Patreon",
+                "Creator B",
+                null,
+                "Activation");
+
+        Assert.Null(result);
+    }
 
     private static AppDbContext CreateContext()
     {
