@@ -215,4 +215,54 @@ public class SubscriptionLifecycleServiceTests
             subscription.ConfidenceScore,
             3);
     }
+    [Fact]
+    public void ApplyDetection_OlderEmail_DoesNotOverwriteCurrentBillingData()
+    {
+        var subscription =
+            new Subscription
+            {
+                Status = "Active",
+                Amount = 19.99m,
+                Currency = "EUR",
+                BillingCycle = "Monthly",
+                NextBillingDate =
+                    new DateTime(2026, 11, 15)
+            };
+
+        var detection =
+            new SubscriptionDetectionResult
+            {
+                EventType = "Renewal",
+                Amount = 9.99m,
+                Currency = "USD",
+                BillingPeriod = "Yearly",
+                NextBillingDate =
+                    new DateTime(2026, 1, 15),
+                Score = 8
+            };
+
+        var service =
+            new SubscriptionLifecycleService();
+
+        service.ApplyDetection(
+            subscription,
+            detection,
+            false);
+
+        Assert.Equal(
+            19.99m,
+            subscription.Amount);
+
+        Assert.Equal(
+            "EUR",
+            subscription.Currency);
+
+        Assert.Equal(
+            "Monthly",
+            subscription.BillingCycle);
+
+        Assert.Equal(
+            new DateTime(2026, 11, 15),
+            subscription.NextBillingDate);
+    }
 }
