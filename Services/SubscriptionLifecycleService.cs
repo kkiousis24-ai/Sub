@@ -81,13 +81,23 @@ public class SubscriptionLifecycleService
                 detection.PlanName.Trim();
         }
 
+        var hadKnownAmount =
+            subscription.Amount > 0;
+
         // =====================================================
         // Amount
+        //
+        // Older emails may fill a missing amount,
+        // but must not overwrite a known newer amount.
         // =====================================================
 
         if (
             detection.Amount.HasValue &&
-            detection.Amount.Value > 0)
+            detection.Amount.Value > 0 &&
+            (
+                canUpdateStatus ||
+                !hadKnownAmount
+            ))
         {
             subscription.Amount =
                 detection.Amount.Value;
@@ -95,10 +105,20 @@ public class SubscriptionLifecycleService
 
         // =====================================================
         // Currency
+        //
+        // Older emails may fill missing currency data,
+        // but must not overwrite current billing data.
         // =====================================================
 
-        if (!string.IsNullOrWhiteSpace(
-            detection.Currency))
+        if (
+            !string.IsNullOrWhiteSpace(
+                detection.Currency) &&
+            (
+                canUpdateStatus ||
+                !hadKnownAmount ||
+                string.IsNullOrWhiteSpace(
+                    subscription.Currency)
+            ))
         {
             subscription.Currency =
                 detection.Currency
@@ -108,6 +128,9 @@ public class SubscriptionLifecycleService
 
         // =====================================================
         // Billing Cycle
+        //
+        // Older emails may fill an unknown billing cycle,
+        // but must not replace a known newer value.
         // =====================================================
 
         if (
@@ -115,7 +138,15 @@ public class SubscriptionLifecycleService
                 detection.BillingPeriod) &&
             !detection.BillingPeriod.Equals(
                 "Unknown",
-                StringComparison.OrdinalIgnoreCase))
+                StringComparison.OrdinalIgnoreCase) &&
+            (
+                canUpdateStatus ||
+                string.IsNullOrWhiteSpace(
+                    subscription.BillingCycle) ||
+                subscription.BillingCycle.Equals(
+                    "Unknown",
+                    StringComparison.OrdinalIgnoreCase)
+            ))
         {
             subscription.BillingCycle =
                 detection.BillingPeriod.Trim();
