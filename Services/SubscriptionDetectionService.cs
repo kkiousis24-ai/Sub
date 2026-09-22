@@ -469,7 +469,7 @@ public class SubscriptionDetectionService
 
         if (primaryStrongTrial != null)
         {
-            score += 4;
+            score += 5;
 
             if (result.SubscriptionStatus == "Unknown")
             {
